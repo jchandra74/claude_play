@@ -297,12 +297,13 @@ function buildGraph(c) {
   A.limit.threshold.value = -1.5; A.limit.knee.value = 0; A.limit.ratio.value = 20; A.limit.attack.value = 0.001; A.limit.release.value = 0.1;
   chain(A.master, filt(c, 'highpass', 35, 0.7), A.comp, A.limit, c.destination);
   // music bus: instruments -> music -> dip (ducks under SFX) -> muffle filter -> master
-  A.music = c.createGain(); A.music.gain.value = settings.music ? 0.7 : 0;
+  A.music = c.createGain(); A.music.gain.value = settings.music ? 0.55 : 0;
+  A.lift = c.createGain();                 // +1.5dB on the drop
   A.hpf = filt(c, 'highpass', 20, 0.9);   // swept up during builds, snaps back on the drop
   A.dip = c.createGain();
   A.mFilter = filt(c, 'lowpass', 18000, 0.9);
-  chain(A.music, A.hpf, A.dip, A.mFilter, A.master);
-  A.sfx = c.createGain(); A.sfx.gain.value = settings.sfx ? 0.9 : 0; A.sfx.connect(A.master);
+  chain(A.music, A.lift, A.hpf, A.dip, A.mFilter, A.master);
+  A.sfx = c.createGain(); A.sfx.gain.value = settings.sfx ? 1.0 : 0; A.sfx.connect(A.master);
   // kick gets its own saturation so its harmonics survive phone speakers
   A.kickBus = c.createGain();
   chain(A.kickBus, makeDrive(c, 3), (() => { const g = c.createGain(); g.gain.value = 0.6; return g; })(), A.music);
@@ -418,7 +419,8 @@ function noiseHit(t, dur, vol, dest, o = {}) {
 function kick(t, v = 1) {
   voice('sine', 160, t, 0.3, 0.75 * v, A.kickBus, { to: 52, toT: 0.11, a: 0.002 });
   voice('sine', 110, t, 0.12, 0.35 * v, A.kickBus, { to: 65, a: 0.002 });
-  voice('triangle', 320, t, 0.03, 0.3 * v, A.kickBus, { to: 80, a: 0.001 });
+  voice('triangle', 600, t, 0.035, 0.3 * v, A.kickBus, { to: 90, a: 0.001 });
+  noiseHit(t, 0.012, 0.3 * v, A.kickBus, { ft: 'bandpass', ff: 1800, q: 1 });
   noiseHit(t, 0.015, 0.18 * v, A.music, { ft: 'highpass', ff: 3500 });
   const d = A.duck.gain; d.cancelScheduledValues(t); d.setTargetAtTime(A.song === 'boss' ? 0.3 : 0.45, t, 0.003); d.setTargetAtTime(1, t + 0.02, 0.08);
   A.kicks.push(t);
@@ -455,7 +457,7 @@ function bass(t, m, dur, v = 1) {
 function pad(t, notes, dur, v = 1, cut = 1300) {
   notes.forEach(m => {
     const f = mtof(m);
-    [[-12, -0.7], [0, 0], [12, 0.7]].forEach(([det, pan]) =>
+    [[-12, -1], [0, 0], [12, 1]].forEach(([det, pan]) =>
       voice('sawtooth', f, t, dur, 0.024 * v, A.duck, { det, a: 0.35, hold: dur - 1.0, ft: 'lowpass', ff: cut, q: 1, send: A.mRevIn, sendAmt: 0.6, pan }));
   });
 }
@@ -470,12 +472,13 @@ function lead(t, m, dur, o = {}) {
   flt.frequency.exponentialRampToValueAtTime(1800, t + dur + 0.2); flt.Q.value = 2;
   const lfo = c.createOscillator(), lg = c.createGain();
   lfo.frequency.value = 5.5; lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(14, t + Math.min(dur, 0.4)); lfo.connect(lg);
-  [-7, 7].forEach(d => {
+  [[-12, -0.5], [0, 0], [12, 0.5]].forEach(([d, pn]) => {
     const osc = c.createOscillator(); osc.type = sq ? 'square' : 'sawtooth';
     if (o.from) { osc.frequency.setValueAtTime(mtof(o.from), t); osc.frequency.exponentialRampToValueAtTime(f, t + 0.06); }
     else osc.frequency.setValueAtTime(f, t);
     osc.detune.setValueAtTime(d, t);
-    lg.connect(osc.detune); osc.connect(flt); osc.start(t); osc.stop(t + dur + 0.35);
+    const pp = panner(c, pn), og = c.createGain(); og.gain.value = 0.75;
+    lg.connect(osc.detune); chain(osc, og, pp, flt); osc.start(t); osc.stop(t + dur + 0.35);
   });
   g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v, t + 0.02);
   g.gain.setValueAtTime(v, t + Math.max(0.03, dur - 0.05)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.25);
@@ -558,17 +561,18 @@ function playStep(step, t) {
   const { root, iv } = currentChord();
   const breakdown = sec === 3 && A.bar < 4 && I >= 2, build = sec === 3 && A.bar >= 4 && I >= 2;
   const gap = build && A.bar === 7 && s >= 12;                  // one beat of silence before the drop
-  const intro = sec === 0 && A.loops === 0 && I === 2;            // first pass: lighter groove
+  const intro = sec === 0 && A.loops === 0 && I >= 2;            // first pass: lighter groove
   const drop = sec === 0 && A.loops > 0 && I >= 2;                // the return after a build: everything in
   const bSec = sec === 2 && I >= 2;
   // build: high-pass sweep on the music bus, snaps back on the downbeat
   if (s === 0) {
     const f = A.hpf.frequency;
-    if (build && A.bar === 4) { f.cancelScheduledValues(t); f.setValueAtTime(20, t); f.exponentialRampToValueAtTime(650, t + sd * 64); A.hpOn = true; }
+    if (build && A.bar === 4) { f.cancelScheduledValues(t); f.setValueAtTime(60, t); f.exponentialRampToValueAtTime(650, t + sd * 63.5); A.hpOn = true; }
     else if (!build && A.hpOn) { f.cancelScheduledValues(t); f.setValueAtTime(20, t); A.hpOn = false; }
   }
+  if (s === 0 && A.bar === 0) A.lift.gain.setTargetAtTime(drop ? 1.19 : 1, t, 0.05);
   if (A.riserG && !build) { A.riserG.gain.cancelScheduledValues(t); A.riserG.gain.setTargetAtTime(0.0001, t, 0.05); A.riserG = null; }
-  if (s === 0) pad(t, iv.map(x => root + 12 + x).concat([root + 24]), sd * 16 + 0.7, I === 0 ? 1.5 : breakdown ? 1.3 : 1, bSec || I >= 3 || drop ? 2100 : 1300);
+  if (s === 0) pad(t, iv.map(x => root + 12 + x).concat([root + 24]), sd * 16 + 0.7, I === 0 ? 1.5 : breakdown ? 1.3 : 1, drop ? 2400 : bSec ? 1700 : I >= 3 ? 1800 : 1300);
   // drums
   if (I >= 1 && !breakdown && !gap && s % 4 === 0) kick(t, build ? 0.85 : 1);
   if ((I >= 3 || drop) && !breakdown && !build && s === 14 && A.bar % 2 === 1) kick(t, 0.6);
@@ -584,7 +588,7 @@ function playStep(step, t) {
   }
   if (I >= 1 && !breakdown && !gap) {
     if (bSec) hat(t, s % 4 === 2, s % 4 === 2 ? 1.2 : 0.5, s % 2 ? 0.4 : -0.4);
-    else if (I >= 2) hat(t, s % 4 === 2, s % 2 ? 0.55 : 1, s % 2 ? 0.4 : -0.4);
+    else if (I >= 2 && (drop || I >= 3 || s % 2 === 0)) hat(t, s % 4 === 2, s % 2 ? 0.55 : 1, s % 2 ? 0.4 : -0.4);
     else if (s % 4 === 2) hat(t, false, 1, 0.3);
   }
   // bass
@@ -624,8 +628,8 @@ function setMuffle(on) {
 function applyVolumes() {
   if (!A.ctx) return;
   const t = A.ctx.currentTime;
-  A.music.gain.setTargetAtTime(settings.music ? 0.7 : 0, t, 0.05);
-  A.sfx.gain.setTargetAtTime(settings.sfx ? 0.9 : 0, t, 0.05);
+  A.music.gain.setTargetAtTime(settings.music ? 0.55 : 0, t, 0.05);
+  A.sfx.gain.setTargetAtTime(settings.sfx ? 1.0 : 0, t, 0.05);
 }
 
 /* ---------- sound effects ---------- */
@@ -634,7 +638,7 @@ const now = () => A.ctx.currentTime;
 const panX = x => (x / W * 2 - 1) * 0.7;
 function musicDip(depth = 0.7) {
   const t = now(), g = A.dip.gain;
-  g.cancelScheduledValues(t); g.setValueAtTime(depth, t); g.setTargetAtTime(1, t + 0.03, 0.05);
+  g.cancelScheduledValues(t); g.setTargetAtTime(depth, t, 0.004); g.setTargetAtTime(1, t + 0.03, 0.05);
 }
 // brick notes are chord tones of whatever the music is playing, climbing with the combo (capped at A6)
 function comboNote(combo) {
@@ -647,7 +651,7 @@ const SFX = {
     if (!sfxOK() || A.sfxCount > 4) return; A.sfxCount++;
     const t = now(), cn = comboNote(combo), f = mtof(cn.m), pan = panX(x);
     if (cn.over) voice('sine', f * 1.5, t + 0.03, 0.4, 0.06, A.sfx, { pan: -pan, send: A.sRevIn, sendAmt: 0.6 });
-    voice('triangle', f, t, 0.32, 0.45, A.sfx, { pan, send: A.sRevIn, sendAmt: 0.35 });
+    voice('triangle', f, t, 0.32, 0.6, A.sfx, { pan, send: A.sRevIn, sendAmt: 0.35 });
     voice('sine', f * 2, t, 0.12, 0.08, A.sfx, { pan });
     voice('sawtooth', f, t, 0.1, 0.08, A.sfx, { ft: 'lowpass', ff: 3000, pan });
     noiseHit(t, 0.04, 0.07, A.sfx, { ft: 'highpass', ff: 4000, pan });
@@ -657,15 +661,15 @@ const SFX = {
     if (!sfxOK() || A.sfxCount > 4) return; A.sfxCount++;
     const t = now(), pan = panX(x);
     voice('square', 1568, t, 0.25, 0.08, A.sfx, { ft: 'bandpass', ff: 2600, q: 4, pan, send: A.sRevIn });
-    voice('sine', 1175, t, 0.35, 0.2, A.sfx, { pan });
-    voice('triangle', 784, t, 0.15, 0.2, A.sfx, { pan });
+    voice('sine', 1175, t, 0.35, 0.28, A.sfx, { pan });
+    voice('triangle', 784, t, 0.15, 0.28, A.sfx, { pan });
     noiseHit(t, 0.02, 0.1, A.sfx, { ft: 'highpass', ff: 5000, pan });
   },
   gold(x) {
     if (!sfxOK() || A.sfxCount > 4) return; A.sfxCount++;
     const t = now(), pan = panX(x);
-    voice('square', 196, t, 0.15, 0.18, A.sfx, { ft: 'lowpass', ff: 1400, pan });
-    voice('triangle', 392, t, 0.12, 0.2, A.sfx, { pan });
+    voice('square', 196, t, 0.15, 0.25, A.sfx, { ft: 'lowpass', ff: 1400, pan });
+    voice('triangle', 392, t, 0.12, 0.28, A.sfx, { pan });
     noiseHit(t, 0.03, 0.25, A.sfx, { ft: 'bandpass', ff: 4000, pan });
   },
   paddle(x) {
@@ -705,7 +709,7 @@ const SFX = {
   },
   laser(x) {
     if (!sfxOK()) return; const t = now();
-    voice('square', 1800, t, 0.09, 0.25, A.sfx, { to: 400, ft: 'lowpass', ff: 5000, pan: panX(x) });
+    voice('square', 1800, t, 0.09, 0.35, A.sfx, { to: 400, ft: 'lowpass', ff: 5000, pan: panX(x) });
     noiseHit(t, 0.025, 0.12, A.sfx, { ft: 'bandpass', ff: 3000, pan: panX(x) });
   },
   shield() {
