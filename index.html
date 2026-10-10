@@ -780,7 +780,7 @@ function resize() {
   BR_TOP = 104 + Math.round((H - 960) * 0.4);
   if (typeof G !== 'undefined') {
     const k = H / oldH;
-    for (const o of [...G.balls, ...G.caps, ...G.shots, ...G.lasers]) o.y = Math.min(o.y * k, PADDLE_Y - 20);
+    if (k !== 1) for (const o of [...G.balls, ...G.caps, ...G.shots, ...G.lasers]) if (o.y < oldH - 104) o.y = Math.min(o.y * k, PADDLE_Y - 20);
     if (G.state === 'play' && !G.paused && input.isTouch && VW > VH) togglePause(true);
     for (const b of G.bricks) b.y = BR_TOP + b.r * BR_ROW;
     if (G.boss) G.boss.baseY = BR_TOP + 101;
@@ -792,10 +792,14 @@ function resize() {
 
 // each world (5 stages) gets its own sky & grid colours
 const WORLDS = [
-  { sky: ['#04010c', '#160430', '#3d0a5a', '#9c1470'], g1: '255,50,210', g2: '255,140,240', edge: 'rgba(255,60,210,0.9)', hz: '255,120,230' },
-  { sky: ['#01060d', '#05213a', '#0b4566', '#c83c8a'], g1: '0,190,255', g2: '150,240,255', edge: 'rgba(0,232,255,0.9)', hz: '120,240,255' },
-  { sky: ['#0b0104', '#2a0412', '#5e0a2c', '#ff5a3d'], g1: '255,60,90', g2: '255,170,150', edge: 'rgba(255,90,80,0.9)', hz: '255,150,120' },
-  { sky: ['#03010f', '#100a45', '#33208f', '#ff7ad9'], g1: '160,90,255', g2: '215,180,255', edge: 'rgba(190,120,255,0.9)', hz: '220,170,255' },
+  { sky: ['#04010c', '#160430', '#3d0a5a', '#9c1470'], g1: '255,50,210', g2: '255,140,240', edge: 'rgba(255,60,210,0.9)', hz: '255,120,230',
+    sun: ['#fff6a0', '#ffc23d', '#ff4f8b', '#b0128f'], halo: '255,70,170', stars: 1 },
+  { sky: ['#01060d', '#05213a', '#0b4566', '#1d7a9a'], g1: '0,190,255', g2: '150,240,255', edge: 'rgba(0,232,255,0.9)', hz: '120,240,255',
+    sun: ['#e0fff8', '#7affe0', '#3aa8ff', '#2a3cff'], halo: '60,200,255', stars: 0.6 },
+  { sky: ['#0a0004', '#1e0208', '#40061a', '#8a0f28'], g1: '255,50,70', g2: '255,150,130', edge: 'rgba(255,70,70,0.9)', hz: '255,110,90',
+    sun: ['#ffd8b0', '#ff3b3b', '#b0102a', '#5a0010'], halo: '255,40,60', stars: 1.4 },
+  { sky: ['#03010f', '#100a45', '#33208f', '#7a3ad0'], g1: '160,90,255', g2: '215,180,255', edge: 'rgba(190,120,255,0.9)', hz: '220,170,255',
+    sun: ['#f8eaff', '#d08cff', '#8a4aff', '#5a1aff'], halo: '170,100,255', stars: 2 },
 ];
 let WD = WORLDS[0], worldIdx = 0;
 function worldFor(level) { return Math.floor((level - 1) / 5) % WORLDS.length; }
@@ -816,12 +820,12 @@ function buildBackground() {
   // sun
   sunR = 170 * S; sunY = horizonY - 62 * S;
   const halo = g.createRadialGradient(cx, sunY, sunR * 0.6, cx, sunY, sunR * 2.6);
-  halo.addColorStop(0, 'rgba(255,70,170,0.45)'); halo.addColorStop(0.5, 'rgba(160,20,140,0.15)'); halo.addColorStop(1, 'rgba(0,0,0,0)');
+  halo.addColorStop(0, `rgba(${WD.halo},0.45)`); halo.addColorStop(0.5, `rgba(${WD.halo},0.12)`); halo.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = halo; g.fillRect(0, 0, VW, horizonY);
   const sc = document.createElement('canvas'); sc.width = Math.ceil(sunR * 2 * DPR) + 2; sc.height = sc.width;
   const sg = sc.getContext('2d'); sg.scale(DPR, DPR);
   const grad = sg.createLinearGradient(0, 0, 0, sunR * 2);
-  grad.addColorStop(0, '#fff6a0'); grad.addColorStop(0.3, '#ffc23d'); grad.addColorStop(0.62, '#ff4f8b'); grad.addColorStop(1, '#b0128f');
+  grad.addColorStop(0, WD.sun[0]); grad.addColorStop(0.3, WD.sun[1]); grad.addColorStop(0.62, WD.sun[2]); grad.addColorStop(1, WD.sun[3]);
   sg.fillStyle = grad; sg.beginPath(); sg.arc(sunR, sunR, sunR, 0, Math.PI * 2); sg.fill();
   sg.globalCompositeOperation = 'destination-out';
   for (let i = 0; i < 9; i++) {
@@ -862,7 +866,7 @@ function buildBackground() {
   // stars
   stars = [];
   const srnd = mulberry32(7);
-  const n = Math.floor(VW * horizonY / 4200);
+  const n = Math.floor(VW * horizonY / 4200 * WD.stars);
   for (let i = 0; i < n; i++) {
     const y = srnd() * horizonY * 0.85;
     stars.push({ x: srnd() * VW, y, s: srnd() < 0.1 ? 2 : 1, ph: srnd() * 6.28, sp: 0.5 + srnd() * 2.5, a: 0.3 + srnd() * 0.7 * (1 - y / horizonY) });
@@ -1017,7 +1021,7 @@ function startLevel() {
   loadLevel(G.level);
   if ((G.demo ? 0 : worldFor(G.level)) !== worldIdx) buildBackground();
   resetRound(true);
-  G.parTime = 25 + remainingBricks() * 0.9 + (G.boss ? 45 : 0);
+  G.parTime = 30 + remainingBricks() * 1.25 + (G.boss ? 60 : 0);
   G.levelTime = 0; G.lastBreak = 0; G.levelCombo = 0; G.lostThisLevel = false;
   G.pending.length = 0;
   if (!G.demo) G.banner = { t: 0, title: (G.boss ? 'BOSS ' : 'STAGE ') + pad2(G.level), sub: G.levelName, boss: !!G.boss };
@@ -1043,9 +1047,11 @@ function floatText(x, y, txt, color, size = 16, life = 0.9) {
   if (G.texts.length >= 8) G.texts.shift();
   x = clamp(x + rand(-10, 10), 40, W - 40);
   for (let k = 0; k < 4; k++) {
-    if (!G.texts.some(t => Math.abs(t.x - x) < 64 && Math.abs(t.y - y) < 22)) break;
-    y -= 22;
+    const hit = G.texts.find(t => Math.abs(t.x - x) < 64 && Math.abs(t.y - y) < 22);
+    if (!hit) break;
+    if (k % 2) y -= 22; else x = clamp(x + (x >= hit.x ? 44 : -44), 40, W - 40);
   }
+  y = Math.max(y, HUD_H + (G.boss ? 70 : 40));
   G.texts.push({ x, y, txt, color, size, life, max: life, vy: -95 });
 }
 function announce(txt, color, dur = 1.2) { G.ann = { txt, color, t: 0, dur }; }
@@ -1197,8 +1203,8 @@ function updateBoss(dt) {
         const a = i / 16 * Math.PI * 2, s = rand(250, 600);
         part({ type: 'hex', x: b.x, y: b.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, rot: rand(0, 6), vr: rand(-10, 10), size: rand(10, 22), life: rand(0.9, 1.5), max: 1.5, color: i % 2 ? '#00e8ff' : '#ff2bd6', g: 200, drag: 1.2 });
       }
-      G.flashFull = 0.15; G.wasBoss = true;
-      G.flash = 1; G.flashColor = '#ffffff'; addShake(1); G.slowmo = 0.9; SFX.explode(b.x, true); buzz(200);
+      G.flashFull = 0.35; G.wasBoss = true;
+      G.flash = 0.5; G.flashColor = '#ffffff'; addShake(1); G.slowmo = 0.9; SFX.explode(b.x, true); buzz(200);
       addScore(5000 * b.tier); floatText(b.x, b.y, `+${5000 * b.tier}`, '#ffe84a', 34, 1.6);
       G.boss = null;
       let i = 0;
@@ -1211,7 +1217,8 @@ function updateBoss(dt) {
   const sp = (b.phase === 2 ? 1.45 : 1) * (b.stagger > 0 ? 0.25 : 1);
   b.mt = (b.mt || 0) + dt * sp;
   b.r = lerp(b.r, low ? 72 : 62, dt * 2);
-  b.x = W / 2 + Math.sin(b.mt * 0.55) * (W / 2 - (low ? 160 : 100));
+  b.amp = lerp(b.amp || W / 2 - 100, W / 2 - (low ? 160 : 100), dt * 2);
+  b.x = W / 2 + Math.sin(b.mt * 0.55) * b.amp;
   // once its shield wall is gone the core sinks lower and becomes easier to hit
   const shieldLeft = G.bricks.some(br => br.alive && br.t !== 'G');
   b.drop = lerp(b.drop || 0, shieldLeft ? 0 : low ? 90 : 50, dt * 0.8);
@@ -1249,7 +1256,7 @@ function damageBoss(d, x, y) {
   if (b.phase === 1 && b.hp <= b.max / 2) {
     b.phase = 2; b.stagger = 3; b.cd = Math.max(b.cd, 3.5); G.shots.length = 0;
     announce('CORE EXPOSED!', '#ffe84a', 1.6); G.flash = 0.7; G.flashColor = '#ff3b6b';
-    floatText(b.x, b.y - b.r - 20, 'VULNERABLE', '#ffe84a', 18, 2.5);
+    floatText(b.x, b.y + b.r + 34, 'VULNERABLE', '#ffe84a', 18, 2.5);
   }
   if (b.hp <= 0) {
     b.dead = true; b.dT = 0;
@@ -1427,7 +1434,13 @@ function updateBalls(dt) {
   let assist = null;
   if (G.state === 'play' && G.levelTime - G.lastBreak > 4) {
     const left = G.bricks.filter(b => b.alive && b.t !== 'G');
-    if (left.length && left.length <= 3) assist = left;
+    if (left.length && left.length <= 5) assist = left;
+    // stalled behind indestructible bricks: melt the gold so the stage can always be finished
+    if (left.length && left.length <= 5 && G.levelTime - G.lastBreak > 15 && G.bricks.some(b => b.alive && b.t === 'G')) {
+      for (const b of G.bricks) if (b.alive && b.t === 'G') { b.t = 'S'; b.hp = 1; b.flash = 1; b.wob = 1; sparks(b.x + b.w / 2, b.y + b.h / 2, '#ffc23d', 8, 260, 0.4); }
+      announce('GOLD MELTDOWN!', '#ffc23d', 1.4); G.flash = 0.5; G.flashColor = '#ffc23d'; addShake(0.3); SFX.power();
+      G.lastBreak = G.levelTime;
+    }
     else if (!left.length && G.boss && !G.boss.dead) assist = [{ x: G.boss.x - 1, y: G.boss.y - 1, w: 2, h: 2 }];
   }
   for (const b of G.balls) {
@@ -1525,7 +1538,7 @@ function updateFx(dt) {
 function levelClear() {
   G.state = 'clear'; G.stateTime = 0; G.slowmo = 0.8;
   const time = Math.max(0, Math.round((G.parTime - G.levelTime) * 100 / 10) * 10);
-  let pw = G.shield ? 1000 : 0; for (const k in G.power) if (k !== 'shrink') pw += Math.round(G.power[k] * 20) * 5;
+  let pw = G.shield ? 250 : 0; for (const k in G.power) if (k !== 'shrink') pw += Math.round(G.power[k] * 20) * 5;
   G.tally = [['STAGE BONUS', 1000 * G.level], ['TIME BONUS', time], ['BEST COMBO ' + G.levelCombo, G.levelCombo * 100],
              ['POWER BONUS', pw], ['NO-MISS BONUS', G.lostThisLevel ? 0 : 5000]];
   G.bonus = G.tally.reduce((a, t) => a + t[1], 0); addScore(G.bonus);
@@ -1533,7 +1546,7 @@ function levelClear() {
   G.flash = 0.6; G.flashColor = '#00e8ff';
   let i = 0;
   for (const b of G.bricks) if (b.alive) { G.pending.push({ t: 0.3 + (i++) * 0.06, fn: () => { destroyBrick(b, { silent: true }); } }); }
-  for (const b of G.balls) { ring(b.x, b.y, 60, '#ffffff', 0.4, 4); }
+  for (const b of G.balls) sparks(b.x, b.y, '#ffffff', 8, 200, 0.25);
   G.balls.length = 0; G.caps.length = 0; G.shots.length = 0;
 }
 function gameOver() {
@@ -1717,11 +1730,11 @@ function drawBoss() {
   ctx.globalAlpha = 0.55 + 0.25 * Math.sin(b.t * 4);
   ctx.drawImage(dotSprite(col), -b.r * 2.6, -b.r * 2.6, b.r * 5.2, b.r * 5.2);
   if (b.phase === 2) {
-    ctx.globalAlpha = 0.35 + 0.35 * Math.sin(b.t * 9);
-    ctx.strokeStyle = '#ff3b6b'; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(0, 0, b.r + 40, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 0.55 + 0.3 * Math.sin(b.t * 6);
+    ctx.strokeStyle = '#ff3b6b'; ctx.lineWidth = 7; ctx.beginPath(); ctx.arc(0, 0, b.r + 40, 0, Math.PI * 2); ctx.stroke();
   }
   if (b.stagger > 0) {
-    ctx.globalAlpha = 0.5 + 0.5 * Math.sin(b.t * 20);
+    ctx.globalAlpha = 0.8 + 0.2 * Math.sin(b.t * 8);
     ctx.strokeStyle = '#ffe84a'; ctx.lineWidth = 3; ctx.setLineDash([10, 8]); ctx.beginPath(); ctx.arc(0, 0, b.r + 22, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
   }
   ctx.globalAlpha = 1;
@@ -1960,7 +1973,8 @@ function drawHUD() {
   // par-time bar: drains while the time bonus is still available
   if (G.state === 'play' && !G.demo) {
     const f = clamp(1 - G.levelTime / G.parTime, 0, 1);
-    if (f > 0) { ctx.fillStyle = hexA('#ffe84a', 0.55); ctx.fillRect(W / 2 - W / 2 * f, HUD_H, W * f, 2); }
+    const late = G.parTime - G.levelTime < 10;
+    if (f > 0) { ctx.fillStyle = hexA(late ? '#ff3b6b' : '#ffe84a', 0.85); ctx.fillRect(W / 2 - W / 2 * f, HUD_H, W * f, 4); }
   }
   // combo
   if (G.combo >= 3 && G.state === 'play') {
@@ -2126,7 +2140,7 @@ function drawClear() {
   if (G.stateTime < 0.9 || !G.tally) return;
   const t = G.stateTime - 0.9;
   const ph = 70 + G.tally.length * 34 + 50;
-  ctx.fillStyle = `rgba(8,0,24,${Math.min(0.78, t * 2)})`; rr(ctx, W / 2 - 210, 390, 420, ph, 16); ctx.fill();
+  ctx.fillStyle = `rgba(8,0,24,${Math.min(0.92, t * 2.5)})`; rr(ctx, W / 2 - 210, 390, 420, ph, 16); ctx.fill();
   ctx.strokeStyle = hexA('#00e8ff', Math.min(0.6, t * 2)); ctx.lineWidth = 1.5; rr(ctx, W / 2 - 210, 390, 420, ph, 16); ctx.stroke();
   ctx.globalAlpha = Math.min(1, t * 3);
   gtext('RESULTS', W / 2, 416, 15, '#ff8ae6', { w: 700, blur: 8 });
@@ -2176,7 +2190,7 @@ function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   if (G.flashFull > 0) {
     G.flashFull -= 1 / 60;
-    ctx.fillStyle = '#ffffff'; ctx.globalAlpha = clamp(G.flashFull / 0.15, 0, 1); ctx.fillRect(0, 0, cvs.width, cvs.height); ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ffffff'; ctx.globalAlpha = clamp(G.flashFull / 0.35, 0, 1) * 0.75; ctx.fillRect(0, 0, cvs.width, cvs.height); ctx.globalAlpha = 1;
   }
   if (G.flash > 0.01) {
     ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = G.flash * 0.35;
