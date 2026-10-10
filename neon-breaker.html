@@ -1573,6 +1573,7 @@ function update(dt) {
   const gdt = dt * G.timeScale;
   G.shake = Math.max(0, G.shake - dt * 1.6);
   G.flash = Math.max(0, G.flash - dt * 2.5);
+  if (G.flashFull > 0) G.flashFull -= dt;
   G.displayScore = G.displayScore < G.score ? Math.min(G.score, G.displayScore + Math.max(10, (G.score - G.displayScore) * dt * 8)) : G.score;
 
   if (G.state !== 'gameover') {
@@ -2193,7 +2194,6 @@ function draw() {
   if (G.paused) drawPause();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   if (G.flashFull > 0) {
-    G.flashFull -= 1 / 60;
     ctx.fillStyle = '#ffffff'; ctx.globalAlpha = clamp(G.flashFull / 0.35, 0, 1) * 0.75; ctx.fillRect(0, 0, cvs.width, cvs.height); ctx.globalAlpha = 1;
   }
   if (G.flash > 0.01) {
