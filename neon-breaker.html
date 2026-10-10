@@ -780,7 +780,7 @@ function resize() {
   BR_TOP = 104 + Math.round((H - 960) * 0.4);
   if (typeof G !== 'undefined') {
     const k = H / oldH;
-    for (const o of [...G.balls, ...G.caps, ...G.shots, ...G.lasers]) o.y = Math.min(o.y * k, PADDLE_Y - 20);
+    if (k !== 1) for (const o of [...G.balls, ...G.caps, ...G.shots, ...G.lasers]) if (o.y < oldH - 104) o.y = Math.min(o.y * k, PADDLE_Y - 20);
     if (G.state === 'play' && !G.paused && input.isTouch && VW > VH) togglePause(true);
     for (const b of G.bricks) b.y = BR_TOP + b.r * BR_ROW;
     if (G.boss) G.boss.baseY = BR_TOP + 101;
@@ -1021,7 +1021,7 @@ function startLevel() {
   loadLevel(G.level);
   if ((G.demo ? 0 : worldFor(G.level)) !== worldIdx) buildBackground();
   resetRound(true);
-  G.parTime = 25 + remainingBricks() * 0.9 + (G.boss ? 45 : 0);
+  G.parTime = 30 + remainingBricks() * 1.25 + (G.boss ? 60 : 0);
   G.levelTime = 0; G.lastBreak = 0; G.levelCombo = 0; G.lostThisLevel = false;
   G.pending.length = 0;
   if (!G.demo) G.banner = { t: 0, title: (G.boss ? 'BOSS ' : 'STAGE ') + pad2(G.level), sub: G.levelName, boss: !!G.boss };
@@ -1217,7 +1217,8 @@ function updateBoss(dt) {
   const sp = (b.phase === 2 ? 1.45 : 1) * (b.stagger > 0 ? 0.25 : 1);
   b.mt = (b.mt || 0) + dt * sp;
   b.r = lerp(b.r, low ? 72 : 62, dt * 2);
-  b.x = W / 2 + Math.sin(b.mt * 0.55) * (W / 2 - (low ? 160 : 100));
+  b.amp = lerp(b.amp || W / 2 - 100, W / 2 - (low ? 160 : 100), dt * 2);
+  b.x = W / 2 + Math.sin(b.mt * 0.55) * b.amp;
   // once its shield wall is gone the core sinks lower and becomes easier to hit
   const shieldLeft = G.bricks.some(br => br.alive && br.t !== 'G');
   b.drop = lerp(b.drop || 0, shieldLeft ? 0 : low ? 90 : 50, dt * 0.8);
@@ -1433,7 +1434,13 @@ function updateBalls(dt) {
   let assist = null;
   if (G.state === 'play' && G.levelTime - G.lastBreak > 4) {
     const left = G.bricks.filter(b => b.alive && b.t !== 'G');
-    if (left.length && left.length <= 3) assist = left;
+    if (left.length && left.length <= 5) assist = left;
+    // stalled behind indestructible bricks: melt the gold so the stage can always be finished
+    if (left.length && left.length <= 5 && G.levelTime - G.lastBreak > 15 && G.bricks.some(b => b.alive && b.t === 'G')) {
+      for (const b of G.bricks) if (b.alive && b.t === 'G') { b.t = 'S'; b.hp = 1; b.flash = 1; b.wob = 1; sparks(b.x + b.w / 2, b.y + b.h / 2, '#ffc23d', 8, 260, 0.4); }
+      announce('GOLD MELTDOWN!', '#ffc23d', 1.4); G.flash = 0.5; G.flashColor = '#ffc23d'; addShake(0.3); SFX.power();
+      G.lastBreak = G.levelTime;
+    }
     else if (!left.length && G.boss && !G.boss.dead) assist = [{ x: G.boss.x - 1, y: G.boss.y - 1, w: 2, h: 2 }];
   }
   for (const b of G.balls) {
@@ -1531,7 +1538,7 @@ function updateFx(dt) {
 function levelClear() {
   G.state = 'clear'; G.stateTime = 0; G.slowmo = 0.8;
   const time = Math.max(0, Math.round((G.parTime - G.levelTime) * 100 / 10) * 10);
-  let pw = G.shield ? 1000 : 0; for (const k in G.power) if (k !== 'shrink') pw += Math.round(G.power[k] * 20) * 5;
+  let pw = G.shield ? 250 : 0; for (const k in G.power) if (k !== 'shrink') pw += Math.round(G.power[k] * 20) * 5;
   G.tally = [['STAGE BONUS', 1000 * G.level], ['TIME BONUS', time], ['BEST COMBO ' + G.levelCombo, G.levelCombo * 100],
              ['POWER BONUS', pw], ['NO-MISS BONUS', G.lostThisLevel ? 0 : 5000]];
   G.bonus = G.tally.reduce((a, t) => a + t[1], 0); addScore(G.bonus);
@@ -1966,7 +1973,8 @@ function drawHUD() {
   // par-time bar: drains while the time bonus is still available
   if (G.state === 'play' && !G.demo) {
     const f = clamp(1 - G.levelTime / G.parTime, 0, 1);
-    if (f > 0) { ctx.fillStyle = hexA('#ffe84a', 0.55); ctx.fillRect(W / 2 - W / 2 * f, HUD_H, W * f, 2); }
+    const late = G.parTime - G.levelTime < 10;
+    if (f > 0) { ctx.fillStyle = hexA(late ? '#ff3b6b' : '#ffe84a', 0.85); ctx.fillRect(W / 2 - W / 2 * f, HUD_H, W * f, 4); }
   }
   // combo
   if (G.combo >= 3 && G.state === 'play') {
