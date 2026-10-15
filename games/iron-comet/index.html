@@ -8,6 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>Iron Comet</title>
 <style>
+  :root { --sat: env(safe-area-inset-top, 0px); --sar: env(safe-area-inset-right, 0px); --sab: env(safe-area-inset-bottom, 0px); --sal: env(safe-area-inset-left, 0px); }
   html, body {
     margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000;
     touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
@@ -24,7 +25,7 @@
   .zone { position: absolute; pointer-events: auto; touch-action: none; }
   #padZone { left: 0; bottom: 0; width: 42%; height: 78%; }
   #btnZone { right: 0; bottom: 0; width: 42%; height: 78%; }
-  #sysZone { right: 0; top: 0; width: 120px; height: 56px; }
+  #sysZone { left: 40%; bottom: 0; width: 120px; height: 56px; }
   #rotate {
     position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 14px;
     background: #0b0714; color: #ffd47a; font: 700 16px/1.4 monospace; text-align: center; padding: 16px; z-index: 5;
@@ -36,8 +37,8 @@
 <canvas id="c" width="320" height="180"></canvas>
 <div id="touch">
   <canvas id="padC" width="48" height="48"></canvas>
-  <canvas id="btnA" width="30" height="40"></canvas>
-  <canvas id="btnB" width="30" height="40"></canvas>
+  <canvas id="btnA" width="30" height="30"></canvas>
+  <canvas id="btnB" width="30" height="30"></canvas>
   <canvas id="btnP" width="16" height="16"></canvas>
   <canvas id="btnM" width="16" height="16"></canvas>
   <div class="zone" id="padZone"></div>
@@ -58,11 +59,23 @@ const ctx = cv.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 const QS = new URLSearchParams(location.search);
 
+/* Desktop: centred, integer-scaled. Touch: pinned to the top and scaled to fill, so the band below the
+   roofline (carriage sides, wheels, track: no threats) hosts the controls. */
+const SAFE = { t: 0, r: 0, b: 0, l: 0 };
+let touchMode = false, view = { x: 0, y: 0, s: 1 };
+function readSafe() { const cs = getComputedStyle(document.documentElement); for (const k of ['t', 'r', 'b', 'l']) SAFE[k] = parseFloat(cs.getPropertyValue('--sa' + k)) || 0; }
 function resize() {
-  const s = Math.min(innerWidth / W, innerHeight / H);
-  const k = s >= 2 ? Math.floor(s) : s;
-  cv.style.width = Math.round(W * k) + 'px';
-  cv.style.height = Math.round(H * k) + 'px';
+  readSafe();
+  const vw = innerWidth, vh = innerHeight;
+  if (!touchMode) {
+    const s = Math.min(vw / W, vh / H), k = s >= 2 ? Math.floor(s) : s;
+    view = { s: k, x: (vw - W * k) / 2, y: (vh - H * k) / 2 };
+  } else {
+    const aw = vw - SAFE.l - SAFE.r, ah = vh - SAFE.t - SAFE.b, k = Math.min(aw / W, ah / H);
+    view = { s: k, x: SAFE.l + (aw - W * k) / 2, y: SAFE.t };
+  }
+  Object.assign(cv.style, { width: Math.round(W * view.s) + 'px', height: Math.round(H * view.s) + 'px', left: Math.round(view.x) + 'px', top: Math.round(view.y) + 'px', transform: 'none' });
+  if (touchMode && typeof layoutTouch === 'function') layoutTouch();
 }
 addEventListener('resize', resize); resize();
 
@@ -156,9 +169,9 @@ function text(str, x, y, col, opt = {}) {
    AUDIO: tiny chiptune tracker + procedural SFX
    ========================================================================= */
 let ac = null, master, musicBus, sfxBus, noiseBuf, waves = {}, muted = false;
-function setPaused(v) { S.paused = v; if (ac) { if (v) ac.suspend(); else ac.resume(); } }
+function setPaused(v) { if (!v && S.paused) S.resumeT = 1.5; S.paused = v; if (ac) { if (v) ac.suspend(); else ac.resume(); } }
 function initAudio() {
-  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  if (ac) { if (ac.state === 'suspended' && !S.paused) ac.resume(); return; }
   const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
   ac = new AC();
   master = ac.createGain(); master.gain.value = muted ? 0 : 0.7;
@@ -175,6 +188,7 @@ function initAudio() {
   }
   startAmbience();
 }
+function duckMusic() { if (!ac || muted) return; const g = musicBus.gain, t = ac.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(0.28, t); g.linearRampToValueAtTime(0.55, t + 0.3); }
 function setMuted(m) { muted = m; if (master) master.gain.setTargetAtTime(m ? 0 : 0.7, ac.currentTime, 0.02); }
 
 function tone(o) {
@@ -201,12 +215,12 @@ function noise(o) {
 
 const NOTE = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
 const nf = n => { const m = /^([A-G]#?)(\d)$/.exec(n); return 440 * Math.pow(2, (NOTE[m[1]] + (+m[2] + 1) * 12 - 69) / 12); };
-const CHORDS = { Am: ['A', 'C', 'E'], F: ['F', 'A', 'C'], G: ['G', 'B', 'D'], E: ['E', 'G#', 'B'], C: ['C', 'E', 'G'], Dm: ['D', 'F', 'A'], Em: ['E', 'G', 'B'], B: ['B', 'D#', 'F#'], D: ['D', 'F#', 'A'], Bb: ['A#', 'D', 'F'], A: ['A', 'C#', 'E'] };
+const CHORDS = { Am: ['A', 'C', 'E'], F: ['F', 'A', 'C'], G: ['G', 'B', 'D'], E: ['E', 'G#', 'B'], C: ['C', 'E', 'G'], Dm: ['D', 'F', 'A'], Em: ['E', 'G', 'B'], B: ['B', 'D#', 'F#'], D: ['D', 'F#', 'A'], Bb: ['A#', 'D', 'F'], A: ['A', 'C#', 'E'], Gm: ['G', 'A#', 'D'] };
 const cn = (name, oct) => nf(name + oct);
 
 /* Song format: bars of { c: chord, l: 16 lead tokens }. '-' holds, '.' rests. */
 function compile(def) {
-  const steps = []; const nb = def.bars.length;
+  const steps = []; const nb = def.bars.length, TR = Math.pow(2, (def.tr || 0) / 12);
   for (let b = 0; b < nb; b++) {
     const bar = def.bars[b], toks = (bar.l || '. . . . . . . . . . . . . . . .').trim().split(/\s+/);
     for (let i = 0; i < 16; i++) steps.push([]);
@@ -214,15 +228,15 @@ function compile(def) {
     for (let i = 0; i < 16; i++) {
       const tk = toks[i]; if (!tk || tk === '-' || tk === '.') continue;
       let len = 1; while (toks[i + len] === '-') len++;
-      steps[base + i].push({ ch: 'lead', f: nf(tk), len });
+      steps[base + i].push({ ch: 'lead', f: nf(tk) * TR, len });
     }
     const ch = CHORDS[bar.c];
     if (ch) {
-      const root = cn(ch[0], def.bassOct || 2);
+      const root = cn(ch[0], def.bassOct || 2) * TR;
       const bp = def.bass || 'R.O.R.O.R.O.R.O.';
-      for (let i = 0; i < 16; i++) { const k = bp[i]; if (k === 'R') steps[base + i].push({ ch: 'bass', f: root, len: 1.5 }); else if (k === 'O') steps[base + i].push({ ch: 'bass', f: root * 2, len: 1.2 }); else if (k === '5') steps[base + i].push({ ch: 'bass', f: cn(ch[2], def.bassOct || 2) * (NOTE[ch[2]] < NOTE[ch[0]] ? 2 : 1), len: 1.2 }); }
-      if (bar.arp ?? def.arp) for (let i = 0; i < 16; i++) steps[base + i].push({ ch: 'arp', f: cn(ch[i % 3], 4 + (i % 6 > 2 ? 1 : 0)), len: 0.9 });
-      if (def.pad) steps[base].push({ ch: 'pad', fs: ch.map(n => cn(n, 4)), len: 16 });
+      for (let i = 0; i < 16; i++) { const k = bp[i]; if (k === 'R') steps[base + i].push({ ch: 'bass', f: root, len: 1.5 }); else if (k === 'O') steps[base + i].push({ ch: 'bass', f: root * 2, len: 1.2 }); else if (k === '5') steps[base + i].push({ ch: 'bass', f: cn(ch[2], def.bassOct || 2) * TR * (NOTE[ch[2]] < NOTE[ch[0]] ? 2 : 1), len: 1.2 }); }
+      if (bar.arp ?? def.arp) for (let i = 0; i < 16; i++) steps[base + i].push({ ch: 'arp', f: cn(ch[i % 3], 4 + (i % 6 > 2 ? 1 : 0)) * TR, len: 0.9 });
+      if (def.pad) steps[base].push({ ch: 'pad', fs: ch.map(n => cn(n, 4) * TR), len: 16 });
     }
     const dp = bar.d ?? def.drums;
     if (dp) for (let i = 0; i < 16; i++) { const k = dp[i]; if (k && k !== '.') steps[base + i].push({ ch: 'drum', k }); }
@@ -255,7 +269,7 @@ function playSong(id) {
 }
 function musicTick() {
   if (!ac || !Music.song) return;
-  const s = Music.song, sd = 60 / s.bpm / 4;
+  const s = Music.song, sd = 60 / (s.bpm * (Music.tempo || 1)) / 4;
   if (Music.next < ac.currentTime - 0.2) Music.next = ac.currentTime + 0.02;
   while (Music.next < ac.currentTime + 0.14) {
     for (const ev of s.steps[Music.step]) playStep(ev, Music.next, sd);
@@ -299,7 +313,7 @@ const SONGS = {
     { c: 'E',  l: 'B5 - - - G#5 - - - E5 - - - B4 - D5 -', d: D3 },
   ] }),
   boss: compile({ bpm: 168, bass: 'R.RRO.R.R.RRO.5.', drums: D2, arp: true, bars: BOSS_BARS }),
-  bossRage: compile({ bpm: 186, bass: 'RRO.RRO.RRO.RRO.', drums: D3, arp: true, bars: BOSS_BARS }),
+  bossRage: compile({ bpm: 184, tr: 2, bass: 'RRO.RRO.RRO.RRO.', drums: D3, arp: true, bars: BOSS_BARS }),
   canyon: compile({ bpm: 160, bass: 'R..5R..5R..5R.O.', drums: 'K.hhS.hhK.hhS.hS', bars: [
     { c: 'Em', l: 'E5 - - B4 E5 - G5 - F#5 - E5 - D5 - B4 -' },
     { c: 'D',  l: 'D5 - - A4 D5 - F#5 - E5 - D5 - A4 - - -' },
@@ -323,6 +337,14 @@ const SONGS = {
     { c: 'Bb', l: 'F5 - - D5 - - A#4 - - - D5 - F5 - - -', arp: true },
     { c: 'C',  l: 'G5 - - E5 - - C5 - E5 - G5 - C6 - - -', arp: true },
     { c: 'A',  l: 'C#6 - - - A5 - - - E5 - - - C#5 - - -', d: D3 },
+    { c: 'Bb', l: 'D6 - - - A#5 - - - F5 - - - D5 - - -', d: 'K...S...K.K.S...' },
+    { c: 'C',  l: 'E6 - - - C6 - - - G5 - - - E5 - - -', d: 'K...S...K.K.S...' },
+    { c: 'Dm', l: 'F6 - - E6 D6 - - - A5 - - - F5 - - -', d: 'K...S...K.K.S..h' },
+    { c: 'A',  l: 'E6 - - - C#6 - - - A5 - - - E5 - - -', d: 'K...S...K.K.S.SS' },
+    { c: 'Dm', l: 'A5 - D6 - F6 - - - E6 - D6 - C6 - A5 -', arp: true },
+    { c: 'Bb', l: 'A#5 - D6 - F6 - - - D6 - A#5 - F5 - D5 -', arp: true },
+    { c: 'Gm', l: 'G5 - A#5 - D6 - - - C6 - A#5 - A5 - G5 -', arp: true },
+    { c: 'A',  l: 'A5 - - - - - - - E5 - - - C#5 - E5 -', d: D3 },
   ] }),
   storm: compile({ bpm: 176, bass: 'R.RO.RO.R.RO.RO.', drums: D3, bars: [
     { c: 'Dm', l: 'D5 - A4 - D5 - F5 - E5 - D5 - C5 - A4 -' },
@@ -370,11 +392,11 @@ const SFX = {
   fly() { tone({ f: 900, f2: 120, dur: 0.6, duty: 0.25, v: 0.07, slide: 0.6 }); },
   hurt() { tone({ f: 400, f2: 90, dur: 0.3, duty: 0.5, v: 0.18 }); noise({ dur: 0.2, f: 600, v: 0.25 }); },
   bonk() { tone({ f: 120, f2: 70, dur: 0.15, type: 'triangle', v: 0.5 }); noise({ dur: 0.25, f: 300, q: 0.5, v: 0.4 }); tone({ f: 1500, f2: 1400, dur: 0.18, type: 'sine', v: 0.06, vib: 0.05, vibRate: 30 }); },
-  knife() { noise({ dur: 0.18, f: 3000, f2: 7000, q: 2, v: 0.12 }); },
+  knife() { duckMusic(); noise({ dur: 0.18, f: 3000, f2: 7000, q: 2, v: 0.12 }); },
   clink() { tone({ f: 2400, dur: 0.05, type: 'square', v: 0.08 }); tone({ f: 3600, dur: 0.12, type: 'sine', v: 0.1 }); },
   pickup() { [0, 4, 7, 12].forEach((s, i) => tone({ t: ac && ac.currentTime + i * 0.045, f: 880 * Math.pow(2, s / 12), dur: 0.05, duty: 0.25, v: 0.1 })); },
   heart() { [0, 7, 12, 16, 19].forEach((s, i) => tone({ t: ac && ac.currentTime + i * 0.06, f: 523 * Math.pow(2, s / 12), dur: 0.08, duty: 0.5, v: 0.1 })); },
-  warn() { tone({ f: 988, dur: 0.06, duty: 0.5, v: 0.08 }); tone({ t: ac && ac.currentTime + 0.1, f: 988, dur: 0.06, duty: 0.5, v: 0.08 }); },
+  warn() { duckMusic(); tone({ f: 988, dur: 0.06, duty: 0.5, v: 0.08 }); tone({ t: ac && ac.currentTime + 0.1, f: 988, dur: 0.06, duty: 0.5, v: 0.08 }); },
   whistle(d = 0.8) { if (!ac) return; const t = ac.currentTime; for (const f of [466, 587, 698]) tone({ t, f, dur: d, type: 'sawtooth', v: 0.04, a: 0.05, vib: 0.008, vibRate: 5, sus: 1, r: 0.15 }); noise({ t, dur: d, f: 2400, q: 3, v: 0.05 }); },
   coal() { noise({ dur: 0.15, f: 300, q: 0.8, v: 0.3 }); },
   stomp() { tone({ f: 90, f2: 30, dur: 0.35, type: 'sine', v: 0.7 }); noise({ dur: 0.4, f: 200, q: 0.4, v: 0.5 }); },
@@ -386,10 +408,10 @@ const SFX = {
   start() { [0, 4, 7, 12, 16].forEach((s, i) => tone({ t: ac && ac.currentTime + i * 0.07, f: 392 * Math.pow(2, s / 12), dur: 0.09, duty: 0.25, v: 0.12 })); },
   tick() { tone({ f: 1320, dur: 0.02, duty: 0.5, v: 0.05 }); },
   climb() { tone({ f: 330, dur: 0.04, duty: 0.5, v: 0.06 }); tone({ t: ac && ac.currentTime + 0.12, f: 392, dur: 0.04, duty: 0.5, v: 0.06 }); noise({ dur: 0.05, f: 2000, q: 3, v: 0.08 }); },
-  windup(k = 0) { const f = [520, 300, 900, 380][k]; tone({ f, f2: f * 1.7, dur: 0.22, duty: 0.125, v: 0.07, slide: 0.22 }); },
+  windup(k = 0) { duckMusic(); const f = [520, 300, 900, 380][k]; tone({ f, f2: f * 1.7, dur: 0.22, duty: 0.125, v: 0.12, slide: 0.22 }); },
   punch() { tone({ f: 110, f2: 50, dur: 0.08, type: 'triangle', v: 0.35 }); noise({ dur: 0.06, f: 700, q: 0.8, v: 0.18 }); },
   armor() { tone({ f: 160, dur: 0.06, duty: 0.5, v: 0.12 }); tone({ f: 1200, dur: 0.05, type: 'square', v: 0.04 }); },
-  caw() { if (!ac) return; const t = ac.currentTime; for (const o of [0, 0.16]) { tone({ t: t + o, f: 1100, f2: 700, dur: 0.1, type: 'sawtooth', v: 0.05, slide: 0.1 }); noise({ t: t + o, dur: 0.1, f: 1500, q: 2, v: 0.08 }); } },
+  caw() { if (!ac) return; duckMusic(); const t = ac.currentTime; for (const o of [0, 0.16]) { tone({ t: t + o, f: 1100, f2: 700, dur: 0.1, type: 'sawtooth', v: 0.05, slide: 0.1 }); noise({ t: t + o, dur: 0.1, f: 1500, q: 2, v: 0.08 }); } },
   heave() { tone({ f: 160, f2: 320, dur: 0.12, type: 'triangle', v: 0.2 }); noise({ dur: 0.12, f: 900, v: 0.12 }); },
   laugh() { if (!ac) return; const t = ac.currentTime; [0, 0.13, 0.26, 0.39].forEach((o, i) => tone({ t: t + o, f: 196 - i * 12, f2: 150 - i * 10, dur: 0.1, duty: 0.25, v: 0.1, vib: 0.03, vibRate: 18 })); },
   gust() { noise({ dur: 2.4, f: 400, f2: 1400, q: 1.2, v: 0.35 }); },
@@ -429,6 +451,7 @@ class PixBuf {
       if ((x > 0 && m[i - 1]) || (x < w - 1 && m[i + 1]) || (y > 0 && m[i - w]) || (y < h - 1 && m[i + w])) d[i] = c;
     }
   }
+  recolor(a, b) { const d = this.d; for (let i = 0; i < d.length; i++) if (d[i] === a) d[i] = b; }
   fill(c) { const d = this.d; for (let i = 0; i < d.length; i++) if (d[i]) d[i] = c; }
   tint(m) { const d = this.d; for (let i = 0; i < d.length; i++) { const v = d[i]; if (!v || v === OUTLINE) continue; d[i] = (0xff000000 | (Math.min(255, ((v >>> 16) & 255) * m[2]) << 16) | (Math.min(255, ((v >>> 8) & 255) * m[1]) << 8) | Math.min(255, (v & 255) * m[0])) >>> 0; } }
   blit(x, y) { this.g.putImageData(this.img, 0, 0); ctx.drawImage(this.cv, Math.round(x), Math.round(y)); }
@@ -443,8 +466,8 @@ function mkRig(o) {
   return r;
 }
 const RIGS = {
-  hero: mkRig({ kind: 'hero', hr: 3, T: 8, Ua: 4, La: 4, Th: 5, Sh: 5, tw: 4, col: { skin: '#f4b88c', hair: '#5a2c1a', shirt: '#2f6ae0', pants: '#26264a', shoe: '#6a3418', hat: '#7a4a22', acc: '#9fe8ff', belt: '#f0c040' } }),
-  thug: mkRig({ kind: 'thug', hr: 3, T: 9, Ua: 5, La: 4, Th: 5, Sh: 6, tw: 5, col: { skin: '#d89068', hair: '#2a1a12', shirt: '#e8e0cc', pants: '#5a4630', shoe: '#2a1a12', hat: '#d83838', acc: '#3a3a72', belt: '#2a1a12' } }),
+  hero: mkRig({ kind: 'hero', hr: 3, T: 8, Ua: 4, La: 4, Th: 5, Sh: 5, tw: 4, col: { skin: '#f4b88c', hair: '#5a2c1a', shirt: '#3a7cff', pants: '#26264a', shoe: '#6a3418', hat: '#7a4a22', acc: '#9fe8ff', belt: '#f0c040' } }),
+  thug: mkRig({ kind: 'thug', hr: 3, T: 9, Ua: 5, La: 4, Th: 5, Sh: 6, tw: 5, col: { skin: '#d89068', hair: '#2a1a12', shirt: '#d8d0bc', pants: '#5a4630', shoe: '#2a1a12', hat: '#3aa04a', acc: '#3a3a72', belt: '#2a1a12' } }),
   slick: mkRig({ kind: 'slick', hr: 3, T: 9, Ua: 5, La: 4, Th: 6, Sh: 6, tw: 4, col: { skin: '#e8b090', hair: '#1a1a1a', shirt: '#4a2e5e', pants: '#2a2234', shoe: '#101010', hat: '#181818', acc: '#c0c8d8', belt: '#c8a040' } }),
   brute: mkRig({ kind: 'brute', hr: 3, T: 11, Ua: 6, La: 5, Th: 6, Sh: 6, tw: 7, aw: 3, lw: 3, big: true, bare: true, col: { skin: '#d08a5c', hair: '#3a2010', shirt: '#ece4d4', pants: '#38486a', shoe: '#1a1a1a', hat: '#4a5a3a', acc: '#e8d8b8', belt: '#6a3a1a' } }),
   boss: mkRig({ kind: 'boss', hr: 4, T: 12, Ua: 7, La: 6, Th: 6, Sh: 7, tw: 8, aw: 3, lw: 3, big: true, col: { skin: '#eaa880', hair: '#e8e8f0', shirt: '#a8182c', pants: '#22182c', shoe: '#101010', hat: '#18121e', acc: '#ffd040', belt: '#ffd040' } }),
@@ -562,7 +585,7 @@ function drawRig(r, pose, sx, sy, f, opt = {}) {
   const tn = opt.tint || curTint(sx + S.camX);
   if (tn) B.tint(tn);
   if (opt.sil) { B.fill(SIL32); const e = T(head); B.px(e[0] + f, e[1] - 1, EYE32); B.px(e[0] + 2 * f, e[1] - 1, EYE32); }
-  if (opt.flash) B.fill(opt.flash === 2 ? RED32 : WHITE);
+  if (opt.flash === 2) B.recolor(OUTLINE, RED32); else if (opt.flash) B.fill(WHITE);
   B.blit(sx - ox, sy - oy);
   return { hand: T(hF).map((v, i) => v - (i ? oy : ox)) };
 }
@@ -723,21 +746,24 @@ const touchKeys = { left: 0, right: 0, down: 0, up: 0 };
 const TUI = { pad: { x: 0, y: 0, r: 60 }, A: { x: 0, y: 0, r: 40, on: 0 }, B: { x: 0, y: 0, r: 40, on: 0 }, P: { x: 0, y: 0 }, M: { x: 0, y: 0 }, dir: { l: 0, r: 0, u: 0, d: 0 } };
 const tptrs = new Map();
 const $ = id => document.getElementById(id);
-function enableTouch() { if (!isTouch) { isTouch = true; } $('touch').classList.add('on'); layoutTouch(); }
+function enableTouch() { isTouch = true; touchMode = true; $('touch').classList.add('on'); resize(); }
 function layoutTouch() {
-  const vw = innerWidth, vh = innerHeight, u = clamp(Math.min(vh * 0.36, vw * 0.2), 96, 168);
-  const sl = 14 + (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sal')) || 0);
-  TUI.pad.r = u / 2; TUI.pad.x = sl + u * 0.62 + 6; TUI.pad.y = vh - u * 0.62 - 10;
-  const br = u * 0.3; TUI.A.r = TUI.B.r = br;
-  TUI.A.x = vw - 14 - br - 6; TUI.A.y = vh - br * 2.25 - 14;
-  TUI.B.x = TUI.A.x - br * 2.35; TUI.B.y = vh - br * 1.75 - 22; TUI.A.y = TUI.B.y - br * 1.1;
+  const vw = innerWidth, vh = innerHeight;
+  // the safe band starts just under the roofline+hazard zone (internal y≈128)
+  const bandTop = view.y + 128 * view.s, bandH = vh - SAFE.b - bandTop;
+  const u = clamp(bandH * 0.98, 84, 156);
+  const bottom = vh - SAFE.b - 6;
+  TUI.pad.r = u / 2; TUI.pad.x = SAFE.l + 10 + u / 2; TUI.pad.y = bottom - u / 2;
+  const br = clamp(u * 0.33, 30, 50); TUI.A.r = TUI.B.r = br;
+  TUI.A.x = vw - SAFE.r - 10 - br; TUI.A.y = bottom - br - u * 0.3;
+  TUI.B.x = TUI.A.x - br * 2.25; TUI.B.y = bottom - br;
   const place = (el, cx, cy, size) => { el.style.width = el.style.height = size + 'px'; el.style.left = (cx - size / 2) + 'px'; el.style.top = (cy - size / 2) + 'px'; };
-  place($('padC'), TUI.pad.x, TUI.pad.y, u * 1.05); const bw = br * 2.2; for (const [id, b] of [['btnA', TUI.A], ['btnB', TUI.B]]) { const el = $(id); el.style.width = bw + 'px'; el.style.height = bw * 40 / 30 + 'px'; el.style.left = (b.x - bw / 2) + 'px'; el.style.top = (b.y - bw / 2) + 'px'; }
-  TUI.P.x = vw - 30; TUI.P.y = 26; TUI.M.x = vw - 74; TUI.M.y = 26;
-  place($('btnP'), TUI.P.x, TUI.P.y, 36); place($('btnM'), TUI.M.x, TUI.M.y, 36);
+  place($('padC'), TUI.pad.x, TUI.pad.y, u); place($('btnA'), TUI.A.x, TUI.A.y, br * 2.15); place($('btnB'), TUI.B.x, TUI.B.y, br * 2.15);
+  TUI.M.x = vw / 2 - 30; TUI.P.x = vw / 2 + 30; TUI.P.y = TUI.M.y = vh - SAFE.b - 28;
+  place($('btnP'), TUI.P.x, TUI.P.y, 44); place($('btnM'), TUI.M.x, TUI.M.y, 44);
+  const sz = $('sysZone').style; sz.left = (vw / 2 - 60) + 'px'; sz.top = (vh - SAFE.b - 56) + 'px'; sz.width = '120px'; sz.height = (56 + SAFE.b) + 'px'; sz.right = 'auto';
   drawTouchUI();
 }
-addEventListener('resize', () => { if (isTouch) layoutTouch(); });
 /* Pixel-art control graphics, redrawn only when their state changes */
 function drawTouchUI() {
   const d = TUI.dir;
@@ -750,16 +776,16 @@ function drawTouchUI() {
     const tp = (cx, cy, dx, dy) => { const o = []; for (let i = 0; i < 4; i++) for (let j = -i; j <= i; j++) o.push(dx ? [cx + dx * (i - 2), cy + j] : [cx + j, cy + dy * (i - 2)]); return o; };
     tri(tp(24, 11, 0, 1), d.u); tri(tp(24, 37, 0, -1), d.d); tri(tp(11, 24, 1, 0), d.l); tri(tp(37, 24, -1, 0), d.r);
   }
-  const btn = (id, label, on, col) => { const g = $(id).getContext('2d'); g.clearRect(0, 0, 30, 40);
+  const btn = (id, label, on, col) => { const g = $(id).getContext('2d'); g.clearRect(0, 0, 30, 30);
     const c = (r, f) => { g.fillStyle = f; for (let y = -r; y <= r; y++) { const w = Math.floor(Math.sqrt(r * r - y * y + r * 0.6)); g.fillRect(15 - w, 15 + y + (on ? 1 : 0), w * 2 + 1, 1); } };
     c(14, '#140c1c'); c(13, on ? '#fff2c0' : shade(col, 0.55)); c(12, on ? col : shade(col, 0.8));
-    g.fillStyle = on ? '#fff' : mix(col, '#ffffff', 0.4); g.fillRect(9, 6 + (on ? 1 : 0), 5, 2);
+    g.fillStyle = on ? '#fff' : mix(col, '#ffffff', 0.4); g.fillRect(7, 5 + (on ? 1 : 0), 3, 2);
     // glyph
-    const G = GLYPHS[label[0]]; g.fillStyle = '#140c1c'; for (let i = 0; i < 35; i++) if (G.charCodeAt(i) === 35) g.fillRect(13 + i % 5, 9 + ((i / 5) | 0) + (on ? 1 : 0), 1, 1);
+    const G = GLYPHS[label[0]]; g.fillStyle = '#140c1c'; for (let i = 0; i < 35; i++) if (G.charCodeAt(i) === 35) g.fillRect(13 + i % 5, 5 + ((i / 5) | 0) + (on ? 1 : 0), 1, 1);
     const sub = label.slice(2); let x = 15 - Math.floor((sub.length * 6 - 1) / 2);
-    for (const ch of sub) { const gg = GLYPHS[ch]; for (let i = 0; i < 35; i++) if (gg.charCodeAt(i) === 35) { g.fillStyle = '#140c1c'; g.fillRect(x + i % 5 - 1, 31 + ((i / 5) | 0), 3, 1); g.fillRect(x + i % 5, 30 + ((i / 5) | 0), 1, 3); } x += 6; }
+    for (const ch of sub) { const gg = GLYPHS[ch]; for (let i = 0; i < 35; i++) if (gg.charCodeAt(i) === 35) { g.fillStyle = '#140c1c'; g.fillRect(x + i % 5 - 1, 17 + ((i / 5) | 0) + (on ? 1 : 0), 3, 1); g.fillRect(x + i % 5, 16 + ((i / 5) | 0) + (on ? 1 : 0), 1, 3); } x += 6; }
     x = 15 - Math.floor((sub.length * 6 - 1) / 2);
-    for (const ch of sub) { const gg = GLYPHS[ch]; g.fillStyle = on ? '#ffd070' : '#ffffff'; for (let i = 0; i < 35; i++) if (gg.charCodeAt(i) === 35) g.fillRect(x + i % 5, 31 + ((i / 5) | 0), 1, 1); x += 6; }
+    for (const ch of sub) { const gg = GLYPHS[ch]; g.fillStyle = on ? '#ffd070' : '#ffffff'; for (let i = 0; i < 35; i++) if (gg.charCodeAt(i) === 35) g.fillRect(x + i % 5, 17 + ((i / 5) | 0) + (on ? 1 : 0), 1, 1); x += 6; }
   };
   btn('btnA', 'A JUMP', TUI.A.on, '#e84848'); btn('btnB', 'B KICK', TUI.B.on, '#3a8ae8');
   const sys = (id, kind) => { const g = $(id).getContext('2d'); g.clearRect(0, 0, 16, 16); g.fillStyle = 'rgba(10,6,16,0.55)'; g.fillRect(0, 0, 16, 16); g.fillStyle = '#c8c0d8';
@@ -771,7 +797,7 @@ function padFromPoint(x, y) {
   const dx = x - TUI.pad.x, dy = y - TUI.pad.y, d = Math.hypot(dx, dy), dz = TUI.pad.r * 0.22;
   if (d < dz) return { l: 0, r: 0, u: 0, d: 0 };
   const c = dx / d, s = dy / d;
-  return { l: c < -0.42 ? 1 : 0, r: c > 0.42 ? 1 : 0, u: s < -0.55 ? 1 : 0, d: s > 0.42 ? 1 : 0 };
+  return { l: c < -0.42 ? 1 : 0, r: c > 0.42 ? 1 : 0, u: s < -0.85 ? 1 : 0, d: s > 0.45 ? 1 : 0 };
 }
 function btnFromPoint(x, y) {
   const da = Math.hypot(x - TUI.A.x, y - TUI.A.y), db = Math.hypot(x - TUI.B.x, y - TUI.B.y);
@@ -783,16 +809,15 @@ function syncTouch() {
   for (const p of tptrs.values()) { if (p.role === 'pad') { const q = padFromPoint(p.x, p.y); nd.l |= q.l; nd.r |= q.r; nd.u |= q.u; nd.d |= q.d; } else if (p.role === 'btn') { if (p.btn === 'A') a = 1; if (p.btn === 'B') b = 1; } }
   if (a && !TUI.A.on) { pressed.jump = 1; pressed.start = 1; }
   if (b && !TUI.B.on) { pressed.kick = 1; pressed.start = 1; }
-  if (nd.u && !TUI.dir.u) { pressed.jump = 1; }
   const changed = a !== TUI.A.on || b !== TUI.B.on || nd.l !== TUI.dir.l || nd.r !== TUI.dir.r || nd.u !== TUI.dir.u || nd.d !== TUI.dir.d;
   TUI.A.on = a; TUI.B.on = b; TUI.dir = nd;
-  touchKeys.left = nd.l; touchKeys.right = nd.r; touchKeys.down = nd.d; touchKeys.up = nd.u || a;
+  touchKeys.left = nd.l; touchKeys.right = nd.r; touchKeys.down = nd.d; touchKeys.up = a;
   if (changed) { drawTouchUI(); if (navigator.vibrate && (a || b) ) try { navigator.vibrate(8); } catch (_) {} }
 }
 function tryFullscreen(e) {
-  if (e.pointerType !== 'touch' || tryFullscreen.done) return; tryFullscreen.done = true;
-  const el = document.documentElement;
-  if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).then(() => { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); }).catch(() => {});
+  if (e.pointerType !== 'touch' || tryFullscreen.busy || document.fullscreenElement) return;
+  const el = document.documentElement; if (!el.requestFullscreen) return; tryFullscreen.busy = true;
+  el.requestFullscreen({ navigationUI: 'hide' }).then(() => { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); }).catch(() => {}).finally(() => { tryFullscreen.busy = false; setTimeout(resize, 300); });
 }
 function zoneDown(role) {
   return e => { e.preventDefault(); initAudio(); if (e.pointerType === 'touch' && !$('touch').classList.contains('on')) enableTouch(); tryFullscreen(e);
@@ -800,7 +825,8 @@ function zoneDown(role) {
     const p = { role, x: e.clientX, y: e.clientY, btn: null };
     if (role === 'btn') p.btn = btnFromPoint(p.x, p.y) || (p.x > TUI.A.x - TUI.A.r ? 'A' : 'B');
     if (role === 'sys') { if (Math.abs(p.x - TUI.M.x) < 22) { setMuted(!muted); drawTouchUI(); } else if (S.mode === 'play') setPaused(!S.paused); return; }
-    if (S.mode !== 'play' || S.paused) { pressed.start = 1; if (S.paused) setPaused(false); }
+    if (S.paused) return;
+    if (S.mode !== 'play') pressed.start = 1;
     tptrs.set(e.pointerId, p); syncTouch(); };
 }
 function zoneMove(e) { const p = tptrs.get(e.pointerId); if (!p) return; e.preventDefault(); p.x = e.clientX; p.y = e.clientY; if (p.role === 'btn') { const nb = btnFromPoint(p.x, p.y); if (nb) p.btn = nb; } syncTouch(); }
@@ -812,7 +838,10 @@ for (const [id, role] of [['padZone', 'pad'], ['btnZone', 'btn'], ['sysZone', 's
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
 if (isTouch) enableTouch();
+const IOS = /iP(hone|od|ad)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const STANDALONE = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 cv.addEventListener('pointerdown', e => { initAudio(); if (e.pointerType === 'touch') { enableTouch(); tryFullscreen(e); } if (S.paused) setPaused(false); else pressed.start = 1; });
+addEventListener('orientationchange', () => setTimeout(resize, 250));
 /* merged input view used by the game */
 const inp = { get left() { return keys.left || touchKeys.left; }, get right() { return keys.right || touchKeys.right; }, get down() { return keys.down || touchKeys.down; }, get up() { return keys.up || touchKeys.up; } };
 
@@ -835,8 +864,13 @@ function diff() { return S.stage + S.loop * 2; }
 function buildTrain() {
   const st = stageDef(), segs = []; let x = 0;
   const n = Math.min(9, 5 + S.stage + S.loop);
-  const r = rng(77 + S.stage * 5 + S.loop * 3), gmax = Math.min(22, 4 + diff() * 5);
-  for (let i = 0; i < n; i++) { const gap = i === n - 1 ? GAP : Math.round(GAP + (i ? r() * gmax : 0)); segs.push({ type: 'car', x, w: CAR_W, roof: ROOF, col: st.cars[i % st.cars.length], idx: i, gap }); x += CAR_W + gap; }
+  const r = rng(77 + S.stage * 5 + S.loop * 3), gmax = Math.min(28, 14 + diff() * 5);
+  for (let i = 0; i < n; i++) {
+    // coaches (roof 104), taller boxcars (99, jump up) and low coal hoppers (112) give the run a platforming rhythm
+    const roll = r(); let v = 'coach'; if (i > 0 && i < n - 1) { if (roll < 0.28) v = 'box'; else if (roll < 0.28 + Math.min(0.3, 0.12 + S.stage * 0.06)) v = 'hopper'; }
+    const roof = v === 'box' ? 99 : v === 'hopper' ? 112 : ROOF;
+    const gap = i === n - 1 ? 6 : Math.round(GAP + (i ? r() * gmax : 0));
+    segs.push({ type: 'car', v, x, w: CAR_W, roof, col: st.cars[i % st.cars.length], idx: i, gap }); x += CAR_W + gap; }
   segs.push({ type: 'tender', x, w: 78, roof: 112 }); x += 78 + 6;
   segs.push({ type: 'cab', x, w: 40, roof: 98 }); x += 40;
   segs.push({ type: 'boiler', x, w: 104, roof: 999 }); x += 104;
@@ -858,12 +892,12 @@ function spawnEnemies() {
       if (d >= 1 && roll < 0.15 + d * 0.04) type = 'brute'; else if (roll < 0.55) type = 'slick';
       if (i === 1 && k === 0) type = 'thug';
       const fromFront = r() < 0.6;
-      const x = c.x + (fromFront ? c.w - 6 - k * 12 : 6 + k * 12) + (r() * 20 - 10);
+      const x = c.x + (fromFront ? c.w - 6 - k * 12 : 6 + k * 12) + (r() * 20 - 10); if (c.v === 'hopper' && k > 1) continue;
       S.ents.push(mkEnemy(type, clamp(x, c.x + 6, c.x + c.w - 6), -1));
     }
-    if (r() < 0.75) S.pickups.push({ type: 'ticket', x: c.x + 30 + r() * (c.w - 60), y: ROOF - 12, t: r() * 6 });
-    if (r() < 0.65) S.pickups.push({ type: 'ticket', x: c.x + 30 + r() * (c.w - 60), y: ROOF - 30, t: r() * 6 });
-    if (r() < 0.22) S.pickups.push({ type: 'heart', x: c.x + 40 + r() * (c.w - 80), y: ROOF - 12, t: r() * 6 });
+    if (r() < 0.75) S.pickups.push({ type: 'ticket', x: c.x + 30 + r() * (c.w - 60), y: c.roof - 12, t: r() * 6 });
+    if (r() < 0.65) S.pickups.push({ type: 'ticket', x: c.x + c.w + c.gap / 2, y: c.roof - 26, t: r() * 6 });
+    if (r() < 0.22) S.pickups.push({ type: 'heart', x: c.x + 40 + r() * (c.w - 80), y: c.roof - 12, t: r() * 6 });
   });
 }
 function mkEnemy(type, x, f) {
@@ -890,7 +924,7 @@ function startStage(keepScore) {
   const st = stageDef();
   S.bd = buildBackdrop(st, 100 + S.stage * 13);
   S.targetSpeed = 230 + S.stage * 18 + S.loop * 30; S.speed = S.targetSpeed;
-  buildTrain(); S.bridgeOut = S.targetSpeed * ((S.tender.x / RUN) * 2.3 + 48 - diff() * 2);
+  buildTrain(); S.bridgeOut = S.targetSpeed * ((S.tender.x / RUN) * 1.6 + 28 - diff()); S.hurry = false; S.lastSec = 99; Music.tempo = 1;
   S.trainDist = 0; buildHazards(); spawnEnemies();
   Object.assign(player, { x: 40, y: ROOF, vx: 0, vy: 0, f: 1, ground: true, duck: false, kick: 0, akick: 0, hurt: 0, inv: 1.5, state: 'run', t: 0, safeX: 40, gone: false });
   player.scarf = []; for (let i = 0; i < 7; i++) player.scarf.push({ x: player.x - i * 2, y: ROOF - 17, px: player.x - i * 2, py: ROOF - 17 });
@@ -978,7 +1012,7 @@ function updatePlayer(dt) {
   const prevY = p.y; p.y += p.vy * dt;
   const gr = groundUnder(p.x);
   if (!p.ground) {
-    if (gr !== null && p.vy >= 0 && prevY <= gr + 1 && p.y >= gr) { p.y = gr; p.vy = 0; p.ground = true; p.akick = 0; p.usedAir = false; SFX.land(); burst(p.x, p.y, 3, ['#c8b8a0'], 25, { g: 0, life: 0.25, wind: -50 }); }
+    if (gr !== null && p.vy >= 0 && prevY <= gr + 1 && p.y >= gr) { p.y = gr; p.vy = 0; p.ground = true; p.akick = 0; p.usedAir = false; p.bounces = 0; SFX.land(); burst(p.x, p.y, 3, ['#c8b8a0'], 25, { g: 0, life: 0.25, wind: -50 }); }
     if (p.y > ROOF + 22) { // fell between carriages: always costs a heart, even during i-frames
       p.state = 'gap'; p.vy = 40; p.akick = 0; p.kick = 0;
       S.hearts--; S.dmgTaken++; S.combo = 0; SFX.hurt(); shake(3); addScore(0, p.x, ROOF - 10, 'OUCH!');
@@ -1011,7 +1045,7 @@ function updateEnemies(dt) {
     if (e.state === 'flying') { e.vy += GRAV * 0.8 * dt; e.x += e.vx * dt; e.y += e.vy * dt; e.rot += dt * 14; if (e.y > 260) e.state = 'dead'; continue; }
     if (e.type === 'crow') { updateCrow(e, dt); continue; }
     if (e.state === 'hidden') { if (e.x - S.camX < W + 10 && e.x - S.camX > -10 && Math.abs(e.x - p.x) < 210 && !S.boss) { e.state = 'climb'; e.t = 0; SFX.climb(); } continue; }
-    if (e.state === 'climb') { e.y = lerp(ROOF + 26, ROOF, Math.min(1, e.t / 0.6)); if (e.t >= 0.6) { e.state = 'active'; e.y = ROOF; e.cd = 0.5 + Math.random() * 0.6; } continue; }
+    if (e.state === 'climb') { const r0 = roofAt(e.x) ?? ROOF; e.y = lerp(r0 + 26, r0, Math.min(1, e.t / 0.6)); if (e.t >= 0.6) { e.state = 'active'; e.y = r0; e.cd = 0.5 + Math.random() * 0.6; } continue; }
     if (e.state === 'stun') { e.x += e.vx * dt; e.vx *= 0.9; if (e.t > 0.35) { e.state = 'active'; e.cd = 0.5; } continue; }
     if (e.state === 'duck') { e.y = roofAt(e.x) ?? ROOF; if (!e.duckFor || hazardSpan(e.duckFor)[1] < e.x - 6) { e.state = 'active'; e.duckFor = null; e.cd = 0.3; } continue; }
     // smart gang members duck under incoming bridges (brutes are too proud to)
@@ -1047,7 +1081,7 @@ function updateEnemies(dt) {
   }
   S.ents = S.ents.filter(e => e.state !== 'dead');
   // crows
-  if (!S.boss && S.mode === 'play') { S.crowT -= dt; if (S.crowT <= 0) { S.crowT = Math.max(3, 9 - diff() * 1.2) + Math.random() * 4; const c = mkEnemy('crow', S.camX + W + 20, -1); c.low = Math.random() < 0.45; c.y = c.baseY = player.y - (c.low ? 6 : 18); S.ents.push(c); SFX.caw(); } }
+  if (!S.boss && S.mode === 'play') { S.crowT -= dt; if (S.crowT <= 0) { S.crowT = Math.max(3, 9 - diff() * 1.2) + Math.random() * 4; const c = mkEnemy('crow', S.camX + W + 20, -1); c.low = Math.random() < 0.45 && !S.hazards.some(h => { const x0 = hazardSpan(h)[0]; return x0 > player.x - 60 && x0 - player.x < S.speed * 2.4; }); c.y = c.baseY = player.y - (c.low ? 6 : 18); S.ents.push(c); SFX.caw(); } }
 }
 function updateCrow(e, dt) {
   const p = player;
@@ -1065,6 +1099,7 @@ function knockOff(e, dir, how) {
   const mult = Math.min(8, S.combo);
   const pts = (how === 'bonk' ? base * 3 : how === 'deflect' ? base * 4 : base) * mult;
   addScore(pts, e.x, e.y - 30, (how === 'bonk' ? 'BONK! ' : how === 'deflect' ? 'RETURN! ' : '') + pts);
+  if (S.mode === 'play' && !S.boss) { S.bridgeOut += S.speed; S.pops.push({ x: e.x, y: e.y - 40, t: 0, s: '+1S' }); }
   if (mult > 1) SFX.combo(mult);
   SFX.fly();
 }
@@ -1074,12 +1109,12 @@ function combat(dt) {
     if (e.state === 'hidden' || e.state === 'climb' || e.state === 'flying' || e.state === 'dead' || player.kickHit.has(e)) continue;
     const b = e.type === 'crow' ? { x0: e.x - 6, x1: e.x + 6, y0: e.y - 4, y1: e.y + 4 } : ebox(e);
     if (overlap(hb, b)) {
-      player.kickHit.add(e); e.hp--; e.flash = 0.12; S.hitstop = 0.06; shake(2); SFX.hit(); star((hb.x0 + hb.x1) / 2 + player.f * 4, (hb.y0 + hb.y1) / 2);
+      player.kickHit.add(e); e.hp--; e.flash = 0.12; e.lastKick = S.t; S.hitstop = 0.06; shake(2); SFX.hit(); star((hb.x0 + hb.x1) / 2 + player.f * 4, (hb.y0 + hb.y1) / 2);
       player.kickLanded = true;
       if (e.hp <= 0) knockOff(e, player.f, 'kick');
       else if (e.type === 'brute' && (e.state === 'charge' || (++e.hits % 2 === 1))) { e.x += player.f * 3; SFX.armor(); } // super armour
       else { e.state = 'stun'; e.t = 0; e.vx = player.f * 90; }
-      if (player.akick > 0) { player.vy = Math.min(player.vy, -170); player.usedAir = false; player.akick = 0.2; }
+      if (player.akick > 0 && (player.bounces || 0) < 2) { player.vy = Math.min(player.vy, -170); player.usedAir = false; player.akick = 0.2; player.bounces = (player.bounces || 0) + 1; }
     }
   }
   // projectiles
@@ -1135,7 +1170,10 @@ function updateHazards(dt) {
     for (const e of S.ents) {
       if (e.state === 'hidden' || e.state === 'climb' || e.state === 'flying' || e.state === 'dead') continue;
       const top = e.type === 'crow' ? e.y - 4 : e.y - (e.state === 'duck' ? 13 : e.h);
-      if (e.x + 3 > x0 && e.x - 3 < x1 && top < HAZ_Y) { e.hp = 0; SFX.bonk(); star(e.x, HAZ_Y + 2); knockOff(e, -1, 'bonk'); }
+      if (e.x + 3 > x0 && e.x - 3 < x1 && top < HAZ_Y && e.bonkedBy !== h) {
+        e.bonkedBy = h; SFX.bonk(); star(e.x, HAZ_Y + 2);
+        if (e.type === 'crow' || (e.lastKick && S.t - e.lastKick < 1.5)) { e.hp = 0; knockOff(e, -1, 'bonk'); }
+        else { e.hp--; if (e.hp <= 0) knockOff(e, -1, 'kick'); else { e.state = 'stun'; e.t = 0; e.vx = -60; e.flash = 0.1; } } }
     }
     if (S.boss && S.boss.hp > 0 && S.boss.state !== 'flying') { const b = S.boss; if (b.x + 6 > x0 && b.x - 6 < x1 && b.y - b.h < HAZ_Y && b.inv <= 0) { damageBoss(2); SFX.bonk(); star(b.x, HAZ_Y + 2); } }
   }
@@ -1148,6 +1186,7 @@ function startBoss() {
   const t = S.tender, last = S.segs[S.segs.indexOf(t) - 1];
   S.arena = [last.x + 40, t.x + t.w - 6]; player.x = Math.max(player.x, S.arena[0] + 2);
   S.boss = { type: 'boss', x: t.x + t.w - 16, y: t.roof, vx: 0, vy: 0, f: -1, hp: 10 + diff() * 3, maxhp: 10 + diff() * 3, state: 'intro', t: 0, inv: 0, flash: 0, ph: 0, w: 16, h: 34, throws: 0, ground: true };
+  S.bridgeOut = Math.max(S.bridgeOut, S.trainDist + S.speed * 24);
   S.bossOn = true; playSong('boss'); S.banner = { t: 0, a: 'BARON BOXCAR', b: 'KING OF THE RAILS', c: 'KICK HIM OFF THE TRAIN!', boss: true }; SFX.laugh();
   for (const e of S.ents) if (e.state === 'hidden') e.state = 'dead';
 }
@@ -1161,9 +1200,10 @@ function updateBoss(dt) {
   const b = S.boss; if (!b) return;
   b.t += dt; if (b.inv > 0) b.inv -= dt; if (b.flash > 0) b.flash -= dt;
   const p = player, dx = p.x - b.x;
-  if (b.state === 'flying') { b.vy += GRAV * 0.7 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.rot += dt * 10; if (b.y > 300 && !S.braking) { S.braking = true; beginBrake(); } return; }
+  if (b.state === 'flying') { b.vy += GRAV * 0.7 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.rot += dt * 10; if (b.y > 300 && !S.braking && S.mode === 'play') { S.braking = true; beginBrake(); } return; }
   const roof = () => roofAt(b.x) ?? S.tender.roof;
   if (b.state !== 'leap') b.f = dx > 0 ? 1 : -1;
+  if (S.mode !== 'play') return;
   // hurt the player on contact
   if (b.state !== 'intro' && b.state !== 'stagger' && overlap(ebox(b), pbox())) hurtPlayer(b.x < p.x ? 'left' : 'right');
   // kicks
@@ -1206,7 +1246,8 @@ function finishStage() {
 let lastStep = 0;
 function update(dt) {
   if (pressed.pause && (S.mode === 'play')) { setPaused(!S.paused); pressed.pause = 0; }
-  if (S.paused) { if (pressed.start && !isTouch) {} pressed.start = pressed.jump = pressed.kick = 0; return; }
+  if (S.paused) { pressed.start = pressed.jump = pressed.kick = 0; return; }
+  if (S.resumeT > 0) { S.resumeT -= dt; pressed.start = pressed.jump = pressed.kick = 0; return; }
   if (S.slowmo > 0) { S.slowmo -= dt; dt *= 0.35; }
   S.t += dt;
   if (S.hitstop > 0) { S.hitstop -= dt; ambienceTick(dt, S.speed); return; }
@@ -1221,6 +1262,10 @@ function update(dt) {
     updatePlayer(dt); updateEnemies(dt); combat(dt); updateHazards(dt); updateBoss(dt);
     if (S.comboT > 0) { S.comboT -= dt; if (S.comboT <= 0) S.combo = 0; }
     if (S.hint) { S.hint.t += dt; if (S.hint.t > 2.2) S.hint = null; }
+    { const secs = Math.ceil((S.bridgeOut - S.trainDist) / Math.max(1, S.speed));
+      if (S.mode === 'play' && secs <= 15 && !S.hurry) { S.hurry = true; Music.tempo = 1.12; SFX.whistle(1.2); S.hint = { t: 0, s: 'HURRY! THE BRIDGE IS OUT!' }; }
+      if (S.mode === 'play' && secs <= 10 && secs < S.lastSec) { S.lastSec = secs; SFX.warn(); }
+      if (S.hurry && secs > 18) { S.hurry = false; Music.tempo = 1; } }
     // storm gusts: a howling headwind that shoves you toward the back of the train
     if (stageDef().theme === 'snow' && S.mode === 'play') { S.gustT -= dt; if (S.gustT <= 0 && S.gust === 0) { S.gust = 0.01; S.gustDur = 2.2; SFX.gust(); S.hint = { t: 0, s: 'GUST! HOLD ON!' }; } if (S.gust > 0) { S.gustDur -= dt; S.gust = S.gustDur > 0 ? Math.min(55 + diff() * 5, S.gust + dt * 120) : Math.max(0, S.gust - dt * 80); if (S.gust <= 0) { S.gust = 0; S.gustT = 7 + Math.random() * 5; } } }
     if (!S.bossOn && player.x > S.lastCar.x + S.lastCar.w - 40) startBoss();
@@ -1375,6 +1420,20 @@ function drawTrain() {
       // bogies & wheels
       for (const bx of [x + 22, x + s.w - 22]) { rect(bx - 14, 152, 28, 4, '#2a2228'); drawWheel(bx - 8, 157, 5, ang, '#5a5460'); drawWheel(bx + 8, 157, 5, ang + 1, '#5a5460'); }
       rect(x + 2, 150, s.w - 4, 3, '#1e1a20');
+      if (s === S.lastCar) { rect(x + s.w - 2, ROOF + 1, s.gap + 6, 3, '#6a4a2a'); rect(x + s.w - 2, ROOF + 1, s.gap + 6, 1, '#9a7040'); for (let k = 0; k < s.gap + 6; k += 4) rect(x + s.w - 2 + k, ROOF + 2, 1, 2, '#4a3018'); }
+      if (s.v === 'box') { // tall wooden boxcar: jump up onto it
+        const wd = mix(c, '#6a4020', 0.6), wl = shade(wd, 1.25), wk = shade(wd, 0.7);
+        rect(x, 103, s.w, 48, wd); for (let k = x + 3; k < x + s.w; k += 6) rect(k, 104, 1, 46, wk);
+        rect(x, 103, s.w, 2, wl); rect(x, 146, s.w, 5, wk);
+        rect(x + s.w / 2 - 18, 108, 36, 38, wk); rect(x + s.w / 2 - 17, 109, 34, 36, shade(wd, 0.85)); pline(x + s.w / 2 - 17, 109, x + s.w / 2 + 16, 144, wk); pline(x + s.w / 2 + 16, 109, x + s.w / 2 - 17, 144, wk);
+        rect(x + s.w / 2 - 20, 107, 40, 1, '#2a2228'); rect(x + 8, 120, 6, 4, '#e8c050'); text('IC', x + 24, 128, '#e8e0c0');
+        rect(x + 1, 99, s.w - 2, 4, '#3c3640'); rect(x + 2, 99, s.w - 4, 1, '#6a6070'); for (let k = x + 10; k < x + s.w - 10; k += 22) rect(k, 100, 8, 1, '#5a5262');
+      } else if (s.v === 'hopper') { // low open coal wagon
+        rect(x + 2, 118, s.w - 4, 33, shade(c, 0.6)); for (let k = x + 8; k < x + s.w - 8; k += 18) { rect(k, 118, 2, 32, shade(c, 0.45)); }
+        rect(x + 2, 118, s.w - 4, 2, shade(c, 0.85)); rect(x + 2, 146, s.w - 4, 5, shade(c, 0.4));
+        for (let k = 2; k < s.w - 2; k++) { const hgt = 4 + Math.sin(k * 0.37 + s.idx) * 1.5 + hash(k + s.idx * 99) * 2; rect(x + k, 118 - hgt, 1, hgt, k % 3 ? '#1a1820' : '#2a2832'); if (hash(k * 5 + s.idx) < 0.15) rect(x + k, 118 - hgt, 1, 1, '#7a7488'); }
+        text(String(s.idx + 1), x + s.w / 2, 134, '#e8c050', { align: 'center' });
+      } else {
       // body
       rect(x, 108, s.w, 43, c); rect(x, 108, s.w, 2, cl); rect(x, 146, s.w, 5, cd);
       rect(x, 132, s.w, 2, '#e8c050'); rect(x, 134, s.w, 1, shade('#e8c050', 0.6));
@@ -1395,6 +1454,7 @@ function drawTrain() {
       text(String(s.idx + 1), x + s.w / 2, 138, '#e8c050', { align: 'center' });
       // ladder at front end
       for (let ly = 110; ly < 150; ly += 4) rect(x + s.w - 2, ly, 2, 1, '#2a2228');
+      }
     } else if (s.type === 'tender') {
       rect(x, 148, s.w + 6, 3, '#2a2228');
       for (const bx of [x + 18, x + s.w - 18]) { rect(bx - 12, 152, 24, 4, '#2a2228'); drawWheel(bx - 7, 157, 5, ang, '#5a5460'); drawWheel(bx + 7, 157, 5, ang + 1, '#5a5460'); }
@@ -1462,9 +1522,10 @@ function drawEntities() {
       case 'flying': pose = POSE.tumble(e.rot); break;
       default: pose = POSE.idle(e.t);
     }
-    if (e.state === 'climb') { ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, ROOF + 1); ctx.clip(); drawRig(rig, pose, sx, sy, e.f, { t: e.t, item, flash: e.flash > 0 }); ctx.restore(); }
+    if (e.state === 'climb') { ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, (roofAt(e.x) ?? ROOF) + 1); ctx.clip(); drawRig(rig, pose, sx, sy, e.f, { t: e.t, item, flash: e.flash > 0 }); ctx.restore(); }
     else drawRig(rig, pose, sx, sy, e.f, { t: e.t, item, sil: inShadow(e.x, e.y) && !(e.flash > 0), flash: e.flash > 0 ? 1 : (e.state === 'windup' || e.state === 'chargeup' || e.state === 'aim') && Math.floor(e.t * 16) % 2 ? 2 : 0 });
     if (e.state === 'aim' && Math.floor(e.t * 10) % 2) { rect(sx + e.f * 6, sy - (e.hi ? 20 : 7), 2, 2, '#ffffff'); }
+    if ((e.state === 'windup' || e.state === 'chargeup' || e.state === 'aim') && e.t < 0.5) text('!', sx - 2, sy - e.h - 12 - Math.round(Math.sin(e.t * 20)), '#ff5040', { outline: '#140c1c' });
   }
   // boss
   const b = S.boss; if (b) {
@@ -1509,7 +1570,7 @@ function drawParticles() {
   for (const q of S.parts) { const x = q.x - S.camX, y = q.y, k = q.life / q.max;
     if (q.type === 'smoke') { const r = Math.round(q.r + k * 6); if (k < 0.3) { pcirc(x, y + 1, r, sm[1]); pcirc(x - 1, y - 1, Math.max(1, r - 1), sm[0]); } else pcirc(x, y, r, dpat(k < 0.6 ? sm[0] : sm[1], (1 - k) * 1.1)); }
     else rect(x, y, q.s, q.s, q.col); }
-  for (const k of S.streaks) rect(k.x, k.y, k.l, 1, dpat('#ffffff', 0.35));
+  const sc = st.night >= 1 ? '#3a4470' : mix(st.sky[st.sky.length - 2], '#ffffff', 0.35); for (const k of S.streaks) rect(k.x, k.y, k.l, 1, sc);
 }
 function drawRain() {
   const st = stageDef(); if (!st.rain) return;
@@ -1517,7 +1578,7 @@ function drawRain() {
   if (S.lightning > 0) { drect(0, 0, W, H, '#ffffff', S.lightning * 2.5); }
 }
 function drawHUD() {
-  rect(0, 0, W, 14, dpat('#0a0610', 0.8)); rect(0, 14, W, 1, dpat('#0a0610', 0.4));
+  rect(0, 0, W, 14, '#0e0816'); rect(0, 14, W, 1, '#2a2036');
   for (let i = 0; i < S.maxHearts; i++) drawHeart(4 + i * 9, 4, i < S.hearts ? '#ff4060' : '#3a2030');
   text(String(S.score).padStart(7, '0'), 52, 4, '#ffffff', { shadow: '#000000' });
   text('HI ' + String(Math.max(HI, S.score)).padStart(7, '0'), 104, 4, '#ffd070', { shadow: '#000000' });
@@ -1544,7 +1605,7 @@ function drawBanner() {
   const b = S.banner; if (!b) return;
   const t = b.t, k = t < 0.25 ? t / 0.25 : t > 2.6 ? Math.max(0, (3 - t) / 0.4) : 1;
   const hh = Math.round(40 * k), cy = 42;
-  rect(0, cy - hh / 2, W, hh, dpat('#0a0610', 0.85)); if (hh > 2) { rect(0, cy - hh / 2, W, 1, b.boss ? '#ff6050' : '#ffd070'); rect(0, cy + hh / 2 - 1, W, 1, b.boss ? '#ff6050' : '#ffd070'); }
+  rect(0, cy - hh / 2, W, hh, '#0e0816'); if (hh > 2) { rect(0, cy - hh / 2, W, 1, b.boss ? '#ff6050' : '#ffd070'); rect(0, cy + hh / 2 - 1, W, 1, b.boss ? '#ff6050' : '#ffd070'); }
   if (k > 0.8) {
     text(b.a, W / 2, cy - 16, b.boss ? '#ff6050' : '#ffd070', { align: 'center', s: 2, outline: '#140c1c' });
     text(b.b, W / 2, cy + 1, '#ffffff', { align: 'center', outline: '#140c1c' });
@@ -1562,7 +1623,7 @@ function drawTitle() {
   if (Math.floor(t * 2) % 2) text(isTouch ? 'TAP TO START' : 'PRESS ENTER', W / 2, 100, '#ffffff', { align: 'center', outline: '#140c1c' });
   text('HI ' + String(HI).padStart(7, '0'), W / 2, 4, '#ffd070', { align: 'center', outline: '#140c1c' });
   if (!isTouch) { text('ARROWS MOVE  Z JUMP  X KICK  v DUCK', W / 2, 168, '#ffffff', { align: 'center', outline: '#140c1c' }); }
-  else text('JUMP  KICK  DUCK  -  STOP THE TRAIN', W / 2, 168, '#ffffff', { align: 'center', outline: '#140c1c' });
+  else if (IOS && !STANDALONE) text('TIP: SHARE > ADD TO HOME SCREEN = FULLSCREEN', W / 2, 116, '#ffd070', { align: 'center', outline: '#140c1c' });
 }
 function drawTally() {
   const T = S.tally; rect(60, 40, 200, 100, dpat('#0a0610', 0.85)); rect(60, 40, 200, 1, '#ffd070'); rect(60, 139, 200, 1, '#ffd070');
@@ -1573,8 +1634,8 @@ function drawTally() {
 function drawLighting() {
   // tunnels: the carriages sink into shadow (lit windows are redrawn on top); characters handle themselves via silhouettes
   for (const h of S.hazards) if (h.kind === 'tunnel') { const [a, b] = hazardSpan(h); const x0 = Math.max(0, a - S.camX), x1 = Math.min(W, b - S.camX); if (x1 <= x0) continue;
-    rect(x0, HAZ_Y, x1 - x0, 162 - HAZ_Y, dpat('#04030a', 0.6));
-    for (const sg of S.segs) if (sg.type === 'car') for (let wx = sg.x + 20; wx < sg.x + sg.w - 24; wx += 16) { const x = wx - S.camX; if (x + 1 >= x0 && x + 10 <= x1) { rect(x + 1, 115, 9, 10, '#ffd070'); rect(x + 1, 120, 9, 5, '#e8a040'); } } }
+    ctx.globalCompositeOperation = 'multiply'; rect(x0, HAZ_Y, x1 - x0, 162 - HAZ_Y, '#4a3a5a'); ctx.globalCompositeOperation = 'source-over';
+    for (const sg of S.segs) if (sg.type === 'car' && sg.v === 'coach') for (let wx = sg.x + 20; wx < sg.x + sg.w - 24; wx += 16) { const x = wx - S.camX; if (x + 1 >= x0 && x + 10 <= x1) { rect(x + 1, 115, 9, 10, '#ffd070'); rect(x + 1, 120, 9, 5, '#e8a040'); } } }
 }
 function drawEnding() {
   const t = S.endT; rect(0, 0, W, H, dpat('#0a0610', Math.min(0.85, t * 0.5)));
@@ -1596,7 +1657,8 @@ function render() {
     if (S.mode === 'ending') drawEnding();
     if (S.mode === 'crash') { drect(0, 0, W, H, '#ff3010', Math.min(0.7, S.crashT)); text('BRIDGE OUT!', W / 2, 74, '#ffffff', { align: 'center', s: 2, outline: '#140c1c' }); }
     if (S.mode === 'over') { rect(0, 60, W, 56, dpat('#0a0610', 0.85)); text('GAME OVER', W / 2, 66, '#ff6050', { align: 'center', s: 2, outline: '#140c1c' }); text('SCORE ' + S.score, W / 2, 88, '#ffffff', { align: 'center' }); if (S.newHi) text('NEW HIGH SCORE!', W / 2, 98, '#ffd070', { align: 'center' }); if (S.overT > 1.2 && Math.floor(S.t * 2) % 2) text(isTouch ? 'TAP TO RETRY' : 'PRESS ENTER', W / 2, 106, '#9fe8ff', { align: 'center' }); }
-    if (S.paused) { rect(0, 0, W, H, dpat('#000000', 0.6)); text('PAUSED', W / 2, 74, '#ffffff', { align: 'center', s: 2 }); text(isTouch ? 'TAP TO RESUME' : 'P TO RESUME', W / 2, 94, '#9fe8ff', { align: 'center' }); }
+    if (S.paused) { rect(0, 0, W, H, dpat('#000000', 0.6)); text('PAUSED', W / 2, 74, '#ffffff', { align: 'center', s: 2 }); text(isTouch ? 'TAP HERE TO RESUME' : 'P TO RESUME', W / 2, 94, '#9fe8ff', { align: 'center' }); }
+    else if (S.resumeT > 0) text(String(Math.ceil(S.resumeT / 0.5)), W / 2, 60, '#ffd070', { align: 'center', s: 3, outline: '#140c1c' });
   }
 }
 /* Knife glints and coal embers stay visible even in the dark */
