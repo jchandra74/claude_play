@@ -188,7 +188,7 @@ function initAudio() {
   }
   startAmbience();
 }
-function duckMusic() { if (!ac || muted) return; const g = musicBus.gain, t = ac.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(0.28, t); g.linearRampToValueAtTime(0.55, t + 0.3); }
+function duckMusic() { if (!ac || muted || musicBus.gain.value < 0.4) return; const g = musicBus.gain, t = ac.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(0.28, t); g.linearRampToValueAtTime(0.55, t + 0.3); }
 function setMuted(m) { muted = m; if (master) master.gain.setTargetAtTime(m ? 0 : 0.7, ac.currentTime, 0.02); }
 
 function tone(o) {
@@ -770,11 +770,11 @@ function drawTouchUI() {
   { const g = $('padC').getContext('2d'); g.clearRect(0, 0, 48, 48);
     const arm = (x, y, w, h, on) => { g.fillStyle = '#140c1c'; g.fillRect(x - 1, y - 1, w + 2, h + 2); g.fillStyle = on ? '#ffd070' : '#3a3048'; g.fillRect(x, y, w, h); g.fillStyle = on ? '#fff2c0' : '#5a5070'; g.fillRect(x, y, w, 1); };
     g.fillStyle = 'rgba(10,6,16,0.35)'; g.beginPath(); g.arc(24, 24, 23, 0, 7); g.fill();
-    arm(17, 4, 14, 14, d.u); arm(17, 30, 14, 14, d.d); arm(4, 17, 14, 14, d.l); arm(30, 17, 14, 14, d.r); arm(17, 17, 14, 14, 0);
+    arm(17, 4, 14, 14, 0); arm(17, 30, 14, 14, d.d); arm(4, 17, 14, 14, d.l); arm(30, 17, 14, 14, d.r); arm(17, 17, 14, 14, 0);
     g.fillStyle = '#140c1c'; g.fillRect(17, 17, 14, 14); g.fillStyle = '#2a2236'; g.fillRect(18, 18, 12, 12); g.fillStyle = '#4a4060'; g.fillRect(21, 21, 6, 6);
     const tri = (pts, on) => { g.fillStyle = on ? '#140c1c' : '#c8c0d8'; pts.forEach(([x, y]) => g.fillRect(x, y, 1, 1)); };
     const tp = (cx, cy, dx, dy) => { const o = []; for (let i = 0; i < 4; i++) for (let j = -i; j <= i; j++) o.push(dx ? [cx + dx * (i - 2), cy + j] : [cx + j, cy + dy * (i - 2)]); return o; };
-    tri(tp(24, 11, 0, 1), d.u); tri(tp(24, 37, 0, -1), d.d); tri(tp(11, 24, 1, 0), d.l); tri(tp(37, 24, -1, 0), d.r);
+    g.globalAlpha = 0.35; tri(tp(24, 11, 0, 1), 0); g.globalAlpha = 1; tri(tp(24, 37, 0, -1), d.d); tri(tp(11, 24, 1, 0), d.l); tri(tp(37, 24, -1, 0), d.r);
   }
   const btn = (id, label, on, col) => { const g = $(id).getContext('2d'); g.clearRect(0, 0, 30, 30);
     const c = (r, f) => { g.fillStyle = f; for (let y = -r; y <= r; y++) { const w = Math.floor(Math.sqrt(r * r - y * y + r * 0.6)); g.fillRect(15 - w, 15 + y + (on ? 1 : 0), w * 2 + 1, 1); } };
@@ -864,10 +864,15 @@ function diff() { return S.stage + S.loop * 2; }
 function buildTrain() {
   const st = stageDef(), segs = []; let x = 0;
   const n = Math.min(9, 5 + S.stage + S.loop);
-  const r = rng(77 + S.stage * 5 + S.loop * 3), gmax = Math.min(28, 14 + diff() * 5);
+  const r = rng(77 + S.stage * 5 + S.loop * 3);
+  // middle cars: at least one boxcar (and a hopper from stage 2), the rest shuffled
+  const mid = Array(n - 2).fill('coach'); mid[0] = 'box'; if (S.stage + S.loop > 0) mid[1] = 'hopper'; if (S.stage + S.loop > 1 && n > 6) mid[2] = 'box';
+  for (let i = mid.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [mid[i], mid[j]] = [mid[j], mid[i]]; }
+  const VAR = ['coach', ...mid, 'coach'];
+  const gmax = Math.min(18, 10 + diff() * 3);
   for (let i = 0; i < n; i++) {
     // coaches (roof 104), taller boxcars (99, jump up) and low coal hoppers (112) give the run a platforming rhythm
-    const roll = r(); let v = 'coach'; if (i > 0 && i < n - 1) { if (roll < 0.28) v = 'box'; else if (roll < 0.28 + Math.min(0.3, 0.12 + S.stage * 0.06)) v = 'hopper'; }
+    let v = VAR[i] || 'coach';
     const roof = v === 'box' ? 99 : v === 'hopper' ? 112 : ROOF;
     const gap = i === n - 1 ? 6 : Math.round(GAP + (i ? r() * gmax : 0));
     segs.push({ type: 'car', v, x, w: CAR_W, roof, col: st.cars[i % st.cars.length], idx: i, gap }); x += CAR_W + gap; }
@@ -877,6 +882,7 @@ function buildTrain() {
   S.segs = segs; S.trainLen = x;
   S.tender = segs[n]; S.cab = segs[n + 1]; S.lastCar = segs[n - 1];
 }
+function nearGap(x) { let d = 1e9; for (const s of S.segs) d = Math.min(d, Math.abs(x - s.x), Math.abs(x - s.x - s.w)); return d; }
 function roofAt(x) { for (const s of S.segs) if (x >= s.x && x <= s.x + s.w) return s.roof; return null; }
 function groundUnder(x) { const a = roofAt(x - 3), b = roofAt(x + 3); if (a === null) return b; if (b === null) return a; return Math.min(a, b); }
 
@@ -924,7 +930,7 @@ function startStage(keepScore) {
   const st = stageDef();
   S.bd = buildBackdrop(st, 100 + S.stage * 13);
   S.targetSpeed = 230 + S.stage * 18 + S.loop * 30; S.speed = S.targetSpeed;
-  buildTrain(); S.bridgeOut = S.targetSpeed * ((S.tender.x / RUN) * 1.6 + 28 - diff()); S.hurry = false; S.lastSec = 99; Music.tempo = 1;
+  buildTrain(); S.bridgeOut = S.targetSpeed * ((S.tender.x / RUN) * 1.4 + 8 + 1.2 * (10 + diff() * 3)); S.koBonus = 0; S.hurry = false; S.lastSec = 99; Music.tempo = 1;
   S.trainDist = 0; buildHazards(); spawnEnemies();
   Object.assign(player, { x: 40, y: ROOF, vx: 0, vy: 0, f: 1, ground: true, duck: false, kick: 0, akick: 0, hurt: 0, inv: 1.5, state: 'run', t: 0, safeX: 40, gone: false });
   player.scarf = []; for (let i = 0; i < 7; i++) player.scarf.push({ x: player.x - i * 2, y: ROOF - 17, px: player.x - i * 2, py: ROOF - 17 });
@@ -935,7 +941,8 @@ function startStage(keepScore) {
   S.banner = { t: 0, a: 'STAGE ' + (S.stage + 1 + S.loop * STAGES.length), b: st.name, c: 'STOP THE IRON COMET!' };
   playSong(STAGE_SONGS[S.stage % STAGE_SONGS.length]); SFX.whistle(1.0);
 }
-function newGame() { S.stage = 0; S.loop = 0; S.score = 0; S.hearts = S.maxHearts = 5; startStage(); }
+function newGame() { S.stage = 0; S.loop = 0; S.score = 0; S.credits = 3; S.hearts = S.maxHearts = 5; startStage(); }
+function continueGame() { S.credits--; S.score = 0; S.hearts = S.maxHearts; SFX.start(); startStage(); }
 
 /* =========================================================================
    FX helpers
@@ -994,11 +1001,12 @@ function updatePlayer(dt) {
     if (ctl && pressed.kick && p.kick <= 0 && p.recover <= 0) { p.kick = 0.26; p.kickHit = new Set(); p.kickLanded = false; SFX.kick(); }
   } else {
     p.duck = false;
-    let target = ctl && R ? RUN - S.gust * 0.6 : ctl && L ? -RUN * 0.9 : -wind * 1.5;
+    let target = ctl && R ? RUN - S.gust * 0.18 : ctl && L ? -RUN * 0.9 : -WIND * 1.5 - S.gust * 0.3;
     if (ctl && R) p.f = 1; else if (ctl && L) p.f = -1;
     p.vx = lerp(p.vx, target, Math.min(1, dt * (p.hurt > 0 ? 1 : 6)));
     if (ctl && pressed.kick && p.akick <= 0 && !p.usedAir) { p.akick = 0.42; p.usedAir = true; p.kickHit = new Set(); SFX.kick(); }
-    p.vy += GRAV * dt * (inp.up && p.vy < 0 ? 0.72 : 1);
+    if (inp.up) p.jumpHold = 0.15; else p.jumpHold = Math.max(0, (p.jumpHold || 0) - dt);
+    p.vy += GRAV * dt * ((inp.up || p.jumpHold > 0) && p.vy < 0 ? 0.72 : 1);
   }
   if (p.kick > 0) { p.kick -= dt; p.kickActive = p.kick < 0.21 && p.kick > 0.07; if (p.kick <= 0 && !p.kickLanded) p.recover = 0.16; } else p.kickActive = false;
   if (p.akick > 0) p.akick -= dt;
@@ -1072,7 +1080,7 @@ function updateEnemies(dt) {
         const want = 95;
         if (ad < want - 25) { e.x -= Math.sign(dx) * 40 * dt; e.ph += dt * 9; } else if (ad > want + 30) { e.x += Math.sign(dx) * 40 * dt; e.ph += dt * 9; }
         if (e.cd <= 0 && ad < 200) { e.state = 'aim'; e.t = 0; e.hi = Math.random() < 0.55; SFX.windup(e.hi ? 2 : 3); }
-      } else if (e.state === 'aim') { if (e.t > 0.6 - Math.min(0.2, d * 0.04)) { e.state = 'throw'; e.t = 0; S.shots.push({ type: 'knife', x: e.x + e.f * 6, y: e.y - (e.hi ? 18 : 5), vx: e.f * (145 + d * 10), vy: 0, f: e.f, friendly: false, t: 0 }); SFX.knife(); } }
+      } else if (e.state === 'aim') { if (e.t > 0.6 - Math.min(0.2, d * 0.04)) { e.state = 'throw'; e.t = 0; S.shots.push({ type: 'knife', x: e.x + e.f * 6, y: (roofAt(player.x) ?? ROOF) - (e.hi ? 18 : 5), vx: e.f * (145 + d * 10), vy: 0, f: e.f, friendly: false, t: 0 }); SFX.knife(); } }
       else if (e.state === 'throw') { if (e.t > 0.3) { e.state = 'active'; e.cd = 1.4 + Math.random() * 1.0 - d * 0.1; } }
       // keep on the roof of its car
     }
@@ -1087,6 +1095,7 @@ function updateCrow(e, dt) {
   const p = player;
   // crows fly at the height they will strike: low = jump, high = duck
   const near = e.x - p.x < 90 && e.x > p.x - 10;
+  if (!e.locked) { e.baseY = lerp(e.baseY, (roofAt(p.x) ?? ROOF) - (e.low ? 6 : 18), 0.2); if (near) e.locked = true; }
   e.x -= (near ? 125 : 80 + diff() * 8) * dt; e.y = e.baseY + Math.sin(e.t * 5) * (near ? 1 : 3);
   if (e.x < S.camX - 30) e.state = 'dead';
   if (overlap({ x0: e.x - 5, x1: e.x + 5, y0: e.y - 2, y1: e.y + 2 }, pbox())) hurtPlayer('right');
@@ -1099,7 +1108,7 @@ function knockOff(e, dir, how) {
   const mult = Math.min(8, S.combo);
   const pts = (how === 'bonk' ? base * 3 : how === 'deflect' ? base * 4 : base) * mult;
   addScore(pts, e.x, e.y - 30, (how === 'bonk' ? 'BONK! ' : how === 'deflect' ? 'RETURN! ' : '') + pts);
-  if (S.mode === 'play' && !S.boss) { S.bridgeOut += S.speed; S.pops.push({ x: e.x, y: e.y - 40, t: 0, s: '+1S' }); }
+  if (S.mode === 'play' && !S.boss && S.koBonus < 6) { S.koBonus++; S.bridgeOut += S.speed; S.pops.push({ x: e.x, y: e.y - 40, t: 0, s: '+1S' }); }
   if (mult > 1) SFX.combo(mult);
   SFX.fly();
 }
@@ -1165,12 +1174,12 @@ function updateHazards(dt) {
     const p = player;
     if (!p.gone && p.state !== 'gap' && p.x + 3 > x0 && p.x - 3 < x1) {
       const top = p.y - (p.duck ? 14 : 22);
-      if (top < HAZ_Y && p.inv <= 0) { if (hurtPlayer('right')) { SFX.bonk(); star(p.x, HAZ_Y + 2); player.vy = 40; player.vx = -60; } }
+      if (top < HAZ_Y - 1 && p.inv <= 0) { if (hurtPlayer('right')) { SFX.bonk(); star(p.x, HAZ_Y + 2); player.vy = 40; player.vx = -60; } }
     }
     for (const e of S.ents) {
       if (e.state === 'hidden' || e.state === 'climb' || e.state === 'flying' || e.state === 'dead') continue;
       const top = e.type === 'crow' ? e.y - 4 : e.y - (e.state === 'duck' ? 13 : e.h);
-      if (e.x + 3 > x0 && e.x - 3 < x1 && top < HAZ_Y && e.bonkedBy !== h) {
+      if (e.x + 3 > x0 && e.x - 3 < x1 && top < HAZ_Y - 1 && e.bonkedBy !== h) {
         e.bonkedBy = h; SFX.bonk(); star(e.x, HAZ_Y + 2);
         if (e.type === 'crow' || (e.lastKick && S.t - e.lastKick < 1.5)) { e.hp = 0; knockOff(e, -1, 'bonk'); }
         else { e.hp--; if (e.hp <= 0) knockOff(e, -1, 'kick'); else { e.state = 'stun'; e.t = 0; e.vx = -60; e.flash = 0.1; } } }
@@ -1186,9 +1195,9 @@ function startBoss() {
   const t = S.tender, last = S.segs[S.segs.indexOf(t) - 1];
   S.arena = [last.x + 40, t.x + t.w - 6]; player.x = Math.max(player.x, S.arena[0] + 2);
   S.boss = { type: 'boss', x: t.x + t.w - 16, y: t.roof, vx: 0, vy: 0, f: -1, hp: 10 + diff() * 3, maxhp: 10 + diff() * 3, state: 'intro', t: 0, inv: 0, flash: 0, ph: 0, w: 16, h: 34, throws: 0, ground: true };
-  S.bridgeOut = Math.max(S.bridgeOut, S.trainDist + S.speed * 24);
+  S.bridgeOut = Math.max(S.bridgeOut, S.trainDist + S.speed * 8);
   S.bossOn = true; playSong('boss'); S.banner = { t: 0, a: 'BARON BOXCAR', b: 'KING OF THE RAILS', c: 'KICK HIM OFF THE TRAIN!', boss: true }; SFX.laugh();
-  for (const e of S.ents) if (e.state === 'hidden') e.state = 'dead';
+  for (const e of S.ents) { if (e.state === 'hidden') e.state = 'dead'; else if (e.state !== 'flying' && e.state !== 'dead' && e.x > S.arena[0] - 40) { e.state = 'flying'; e.vx = -120; e.vy = -180; e.rot = 0; } }
 }
 function damageBoss(n) {
   const b = S.boss; if (!b || b.inv > 0 || b.hp <= 0) return;
@@ -1267,7 +1276,7 @@ function update(dt) {
       if (S.mode === 'play' && secs <= 10 && secs < S.lastSec) { S.lastSec = secs; SFX.warn(); }
       if (S.hurry && secs > 18) { S.hurry = false; Music.tempo = 1; } }
     // storm gusts: a howling headwind that shoves you toward the back of the train
-    if (stageDef().theme === 'snow' && S.mode === 'play') { S.gustT -= dt; if (S.gustT <= 0 && S.gust === 0) { S.gust = 0.01; S.gustDur = 2.2; SFX.gust(); S.hint = { t: 0, s: 'GUST! HOLD ON!' }; } if (S.gust > 0) { S.gustDur -= dt; S.gust = S.gustDur > 0 ? Math.min(55 + diff() * 5, S.gust + dt * 120) : Math.max(0, S.gust - dt * 80); if (S.gust <= 0) { S.gust = 0; S.gustT = 7 + Math.random() * 5; } } }
+    if (stageDef().theme === 'snow' && S.mode === 'play') { S.gustT -= dt; if (S.gustT <= 0 && S.gust === 0 && nearGap(player.x) > 40) { S.gust = 0.01; S.gustDur = 2.2; SFX.gust(); S.hint = { t: 0, s: 'GUST! HOLD ON!' }; } if (S.gust > 0) { S.gustDur -= dt; S.gust = S.gustDur > 0 ? Math.min(55 + diff() * 5, S.gust + dt * 120) : Math.max(0, S.gust - dt * 80); if (S.gust <= 0) { S.gust = 0; S.gustT = 7 + Math.random() * 5; } } }
     if (!S.bossOn && player.x > S.lastCar.x + S.lastCar.w - 40) startBoss();
     // camera
     let tx = player.x - 110; if (S.arena) tx = lerp(S.arena[0] - 30, S.arena[1] - W + 60, 0.5);
@@ -1293,7 +1302,7 @@ function update(dt) {
     S.crashT += dt; S.speed = Math.max(0, S.speed - dt * 200); if (S.crashT > 2.5) gameOver();
   } else if (S.mode === 'over') {
     S.overT += dt; S.speed = Math.max(0, S.speed - dt * 60);
-    if (pressed.start && S.overT > 1.2) { SFX.start(); newGame(); }
+    if (S.overT > 1.2) { if (pressed.kick && S.credits > 0) { SFX.start(); newGame(); } else if (pressed.start) { if (S.credits > 0) continueGame(); else { SFX.start(); newGame(); } } }
   }
   // particles
   for (const q of S.parts) { q.life += dt; q.vx += (q.wind || 0) * dt * 0.5 * (q.type === 'smoke' ? 0.02 : 1); q.vy += (q.g || 0) * dt; q.vx *= 1 - (q.drag || 0); q.vy *= 1 - (q.drag || 0); q.x += q.vx * dt + (q.type === 'smoke' ? (q.wind || 0) * dt : 0); q.y += q.vy * dt; }
@@ -1365,10 +1374,10 @@ function drawTunnelBack() {
       for (let y = 92; y < 160; y += 8) rect(x0, y, x1 - x0, 1, '#221a26');
       const ls = 70; for (let L = Math.ceil(a / ls) * ls; L < b; L += ls) { const lx = L - S.camX; pcirc(lx, 96, 7, dpat('#ffb040', 0.2)); pcirc(lx, 96, 4, dpat('#ffd080', 0.4)); rect(lx - 1, 95, 3, 3, '#ffe0a0'); }
     } else if (h.kind === 'bridge') { // far abutment + pier sit behind the train
-      rect(x0 + 2, 85, x1 - x0 - 4, 77, '#3a3240'); for (let y = 90; y < 162; y += 7) rect(x0 + 2, y, x1 - x0 - 4, 1, '#2a2430');
-      rect(x0 + 2, 85, 2, 77, '#5a5262');
-    } else if (h.kind === 'gantry') { rect(x0 + 3, 85, 4, 77, '#2a2a34'); rect(x0 + 3, 85, 1, 77, '#4a4a58'); }
-    else if (h.kind === 'arch') { for (let y = 85; y < 162; y++) { const k = (y - 85) / 77; const w = (x1 - x0) * (0.3 + k * 0.5); rect((x0 + x1) / 2 - w / 2, y, w, 1, y % 9 < 2 ? '#7a3a28' : '#5a2a1c'); } }
+      rect(x0 + 2, 110, x1 - x0 - 4, 52, '#3a3240'); for (let y = 114; y < 162; y += 7) rect(x0 + 2, y, x1 - x0 - 4, 1, '#2a2430');
+      rect(x0 + 2, 110, 2, 52, '#5a5262');
+    } else if (h.kind === 'gantry') { rect(x0 + 3, 110, 4, 52, '#2a2a34'); rect(x0 + 3, 110, 1, 52, '#4a4a58'); }
+    else if (h.kind === 'arch') { for (let y = 110; y < 162; y++) { const k = (y - 85) / 77; const w = (x1 - x0) * (0.3 + k * 0.5); rect((x0 + x1) / 2 - w / 2, y, w, 1, y % 9 < 2 ? '#7a3a28' : '#5a2a1c'); } }
   }
 }
 function drawHazardsFront() {
@@ -1401,7 +1410,7 @@ function drawWarnings() {
     if (sx > W - 4 && sx < W + S.speed * 1.2) {
       const near = 1 - (sx - W) / (S.speed * 1.2), blink = Math.floor(S.t * (6 + near * 10)) % 2;
       if (blink) { rect(W - 26, 70, 22, 14, '#ffd040'); rect(W - 25, 71, 20, 12, '#1a1010'); text('!', W - 18, 74, '#ffd040'); }
-      text(h.kind === 'tunnel' ? 'TUNNEL' : 'DUCK', W - 6, 87, '#ffd040', { align: 'right', outline: '#1a1010' }); text('v', W - 15, 96, '#ffd040', { outline: '#1a1010' }); } }
+      const safe = (roofAt(player.x) ?? ROOF) >= 110; text(safe ? 'SAFE' : h.kind === 'tunnel' ? 'TUNNEL' : 'DUCK', W - 6, 87, '#ffd040', { align: 'right', outline: '#1a1010' }); text('v', W - 15, 96, '#ffd040', { outline: '#1a1010' }); } }
 }
 function drawWheel(cx, cy, r, ang, col) {
   pcirc(cx, cy, r, '#16121a'); pcirc(cx, cy, r - 1, col); pcirc(cx, cy, Math.max(1, r - 2), '#2a2630');
@@ -1583,7 +1592,7 @@ function drawHUD() {
   text(String(S.score).padStart(7, '0'), 52, 4, '#ffffff', { shadow: '#000000' });
   text('HI ' + String(Math.max(HI, S.score)).padStart(7, '0'), 104, 4, '#ffd070', { shadow: '#000000' });
   // bridge-out countdown: the whole point of the game
-  const left = clamp(1 - S.trainDist / S.bridgeOut, 0, 1), secs = Math.max(0, Math.ceil((S.bridgeOut - S.trainDist) / Math.max(1, S.speed)));
+  const left = clamp(1 - S.trainDist / S.bridgeOut, 0, 1), secs = Math.max(0, Math.ceil((S.bridgeOut - S.trainDist) / Math.max(1, S.targetSpeed)));
   const danger = left < 0.25, blink = danger && Math.floor(S.t * (left < 0.1 ? 8 : 4)) % 2;
   text('BRIDGE', 186, 4, danger ? '#ff6050' : '#9fe8ff', { shadow: '#000' });
   text(String(secs).padStart(2, '0') + 'S', 226, 4, blink ? '#ffffff' : danger ? '#ff6050' : '#ffffff', { shadow: '#000' });
@@ -1614,12 +1623,12 @@ function drawBanner() {
 }
 function drawTitle() {
   const t = S.t;
-  rect(0, 20, W, 64, dpat('#0a0610', 0.55));
   const g = ['#fff6d0', '#ffe080', '#ffc040', '#ff9030', '#ff6030', '#e03838', '#a02040'];
   const bob = Math.round(Math.sin(t * 2) * 1.5);
   text('IRON', W / 2, 26 + bob, '#ffd070', { align: 'center', s: 3, grad: g, outline: '#140c1c' });
   text('COMET', W / 2, 52 + bob, '#ffd070', { align: 'center', s: 3, grad: g, outline: '#140c1c' });
   text('THE RUNAWAY EXPRESS', W / 2, 78, '#9fe8ff', { align: 'center', outline: '#140c1c' });
+  if (S.cover) return;
   if (Math.floor(t * 2) % 2) text(isTouch ? 'TAP TO START' : 'PRESS ENTER', W / 2, 100, '#ffffff', { align: 'center', outline: '#140c1c' });
   text('HI ' + String(HI).padStart(7, '0'), W / 2, 4, '#ffd070', { align: 'center', outline: '#140c1c' });
   if (!isTouch) { text('ARROWS MOVE  Z JUMP  X KICK  v DUCK', W / 2, 168, '#ffffff', { align: 'center', outline: '#140c1c' }); }
@@ -1634,7 +1643,7 @@ function drawTally() {
 function drawLighting() {
   // tunnels: the carriages sink into shadow (lit windows are redrawn on top); characters handle themselves via silhouettes
   for (const h of S.hazards) if (h.kind === 'tunnel') { const [a, b] = hazardSpan(h); const x0 = Math.max(0, a - S.camX), x1 = Math.min(W, b - S.camX); if (x1 <= x0) continue;
-    ctx.globalCompositeOperation = 'multiply'; rect(x0, HAZ_Y, x1 - x0, 162 - HAZ_Y, '#4a3a5a'); ctx.globalCompositeOperation = 'source-over';
+    ctx.globalCompositeOperation = 'multiply'; rect(x0, HAZ_Y, x1 - x0, 162 - HAZ_Y, '#7a6a8a'); ctx.globalCompositeOperation = 'source-over';
     for (const sg of S.segs) if (sg.type === 'car' && sg.v === 'coach') for (let wx = sg.x + 20; wx < sg.x + sg.w - 24; wx += 16) { const x = wx - S.camX; if (x + 1 >= x0 && x + 10 <= x1) { rect(x + 1, 115, 9, 10, '#ffd070'); rect(x + 1, 120, 9, 5, '#e8a040'); } } }
 }
 function drawEnding() {
@@ -1656,7 +1665,7 @@ function render() {
     if (S.mode === 'clear') drawTally();
     if (S.mode === 'ending') drawEnding();
     if (S.mode === 'crash') { drect(0, 0, W, H, '#ff3010', Math.min(0.7, S.crashT)); text('BRIDGE OUT!', W / 2, 74, '#ffffff', { align: 'center', s: 2, outline: '#140c1c' }); }
-    if (S.mode === 'over') { rect(0, 60, W, 56, dpat('#0a0610', 0.85)); text('GAME OVER', W / 2, 66, '#ff6050', { align: 'center', s: 2, outline: '#140c1c' }); text('SCORE ' + S.score, W / 2, 88, '#ffffff', { align: 'center' }); if (S.newHi) text('NEW HIGH SCORE!', W / 2, 98, '#ffd070', { align: 'center' }); if (S.overT > 1.2 && Math.floor(S.t * 2) % 2) text(isTouch ? 'TAP TO RETRY' : 'PRESS ENTER', W / 2, 106, '#9fe8ff', { align: 'center' }); }
+    if (S.mode === 'over') { rect(0, 60, W, 68, '#0e0816'); text('GAME OVER', W / 2, 66, '#ff6050', { align: 'center', s: 2, outline: '#140c1c' }); text('SCORE ' + S.score, W / 2, 88, '#ffffff', { align: 'center' }); if (S.newHi) text('NEW HIGH SCORE!', W / 2, 98, '#ffd070', { align: 'center' }); if (S.overT > 1.2) { if (S.credits > 0) { if (Math.floor(S.t * 2) % 2) text('CONTINUE? ' + (isTouch ? 'A = YES  B = NEW GAME' : 'ENTER = YES  X = NEW GAME'), W / 2, 108, '#9fe8ff', { align: 'center' }); text('CREDITS ' + S.credits + '  (SCORE RESETS)', W / 2, 118, '#ffffff', { align: 'center' }); } else if (Math.floor(S.t * 2) % 2) text(isTouch ? 'TAP TO RETRY' : 'PRESS ENTER', W / 2, 108, '#9fe8ff', { align: 'center' }); } }
     if (S.paused) { rect(0, 0, W, H, dpat('#000000', 0.6)); text('PAUSED', W / 2, 74, '#ffffff', { align: 'center', s: 2 }); text(isTouch ? 'TAP HERE TO RESUME' : 'P TO RESUME', W / 2, 94, '#9fe8ff', { align: 'center' }); }
     else if (S.resumeT > 0) text(String(Math.ceil(S.resumeT / 0.5)), W / 2, 60, '#ffd070', { align: 'center', s: 3, outline: '#140c1c' });
   }
