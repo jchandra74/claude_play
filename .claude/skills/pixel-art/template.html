@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Pixel Template</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #screen { position: fixed; image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<script>
+(() => {
+'use strict';
+/* =============================================================================
+   PIXEL TEMPLATE: the house starting point for pixel-art games and scenes.
+   Contract (see .claude/skills/pixel-art/SKILL.md):
+   - Everything is drawn as PALETTE INDICES into an indexed framebuffer at a fixed logical
+     resolution, converted through a LUT once per frame and blitted at an integer scale.
+   - Soft falloff = ordered Bayer dithering between adjacent ramp colours. Never gradients/alpha.
+   - Fixed 60 Hz update, rAF render, and zero allocation inside the loop (typed arrays, pools,
+     scratch objects, no closures/array literals/strings built per frame).
+   - Poses animate smoothly but are sampled to the pixel grid at 12 fps for a hand-keyed feel.
+   ============================================================================= */
+
+/* ---------- RESOLUTION ---------- */
+const W = 320, H = 180;           // logical canvas. Pick once; never draw at any other scale.
+const BAR = 0;                    // letterbox bar height (cinematic 2.39:1 at 320x180 → BAR = 23)
+
+/* ---------- PALETTE: every colour on screen, grouped into ramps with a job each ----------
+   Ramps run dark→light. Shadows shift cool (toward blue/violet), highlights shift warm
+   (toward yellow); never build a ramp by just scaling brightness. Index = position here. */
+const PAL = [
+  // 0-1 inks: letterbox / outline / deepest silhouettes
+  '#0b0a12', '#1c1626',
+  // 2-6 sky, top→horizon: dusty violet → rose → peach → gold
+  '#2c2a4a', '#4a3a66', '#8a4f74', '#d0746a', '#f2a65e',
+  // 7-8 sun disc + glow
+  '#fff4d6', '#ffd98a',
+  // 9-11 far hills (hazy, desaturated, close in value to the sky = atmospheric perspective)
+  '#6a4a72', '#7e5a7e', '#946a86',
+  // 12-14 near hills: cooler and darker
+  '#3a3054', '#4a3c62', '#5e4a70',
+  // 15-18 grass: shadow (cool teal) → highlight (warm yellow-green)
+  '#1f3a3c', '#2f5a46', '#5a8a4a', '#a8b85a',
+  // 19-21 soil / path
+  '#3a2a2a', '#5e4034', '#8a6446',
+  // 22-24 skin shadow / mid / light
+  '#8a4a3a', '#c87a5a', '#f0b08a',
+  // 25-27 tunic shadow / mid / light (hero's identity colour: the most saturated thing on screen)
+  '#1e3a6a', '#2e5ea0', '#4a8ad0',
+  // 28-29 boots / belt
+  '#2a1c22', '#6a4428',
+  // 30-31 scarf
+  '#8a1c2c', '#d83a3a',
+  // 32 rim light (hot, only on edges facing the key light)
+  '#ffe7a0',
+  // 33-36 magic / spark aging ramp: white → bright → mid → dark
+  '#ffffff', '#9ef0ff', '#3aa0e8', '#2a4a8a',
+  // 37-38 UI text + UI shadow
+  '#f4ecd8', '#3a2a44',
+];
+const TRANSPARENT = 255;          // sentinel index for sprite/layer buffers
+const C = { INK: 0, OUTLINE: 1, SKY0: 2, SUN: 7, GLOW: 8, FAR0: 9, NEAR0: 12, GRASS0: 15, SOIL0: 19,
+  SKIN0: 22, TUNIC0: 25, BOOT: 28, BELT: 29, SCARF0: 30, RIM: 32, SPARK0: 33, UI: 37, UISH: 38 };
+const SPARK_RAMP = new Uint8Array([33, 34, 35, 36]);   // particles step through this as they age
+
+/* ---------- DISPLAY ---------- */
+const screen = document.getElementById('screen');
+const sctx = screen.getContext('2d');
+const off = document.createElement('canvas'); off.width = W; off.height = H;
+const octx = off.getContext('2d', { willReadFrequently: true });
+const img = octx.createImageData(W, H);
+const out32 = new Uint32Array(img.data.buffer);
+const fb = new Uint8Array(W * H);          // the indexed framebuffer: palette indices only
+const LUT = new Uint32Array(256);          // index → ABGR (little-endian ImageData)
+function hex32(h) { const n = parseInt(h.slice(1), 16); return (0xff000000 | ((n & 255) << 16) | (n & 0xff00) | (n >> 16)) >>> 0; }
+for (let i = 0; i < PAL.length; i++) LUT[i] = hex32(PAL[i]);
+let scale = 1;
+function resize() {
+  scale = Math.max(1, Math.floor(Math.min(innerWidth / W, innerHeight / H)));   // largest INTEGER factor that fits
+  screen.width = W * scale; screen.height = H * scale;
+  screen.style.width = W * scale + 'px'; screen.style.height = H * scale + 'px';
+  screen.style.left = ((innerWidth - W * scale) >> 1) + 'px'; screen.style.top = ((innerHeight - H * scale) >> 1) + 'px';
+  sctx.imageSmoothingEnabled = false;
+}
+addEventListener('resize', resize); resize();
+function present() {
+  for (let i = 0; i < fb.length; i++) out32[i] = LUT[fb[i]];
+  octx.putImageData(img, 0, 0);
+  sctx.imageSmoothingEnabled = false;
+  sctx.drawImage(off, 0, 0, W * scale, H * scale);
+}
+
+/* ---------- DRAWING PRIMITIVES (integer coords, palette indices, current target) ---------- */
+let tb = fb, tw = W, th = H;               // current target buffer
+function target(buf, w, h) { tb = buf; tw = w; th = h; }
+const BAYER = new Uint8Array([0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]);
+// level 0..16: how much of colour B shows over colour A at (x,y). The ONLY way to do soft falloff.
+const dith = (x, y, level) => level > BAYER[((y & 3) << 2) | (x & 3)];
+function px(x, y, c) { x |= 0; y |= 0; if (x >= 0 && y >= 0 && x < tw && y < th) tb[y * tw + x] = c; }
+function rect(x, y, w, h, c) {
+  x |= 0; y |= 0; let x1 = x + (w | 0), y1 = y + (h | 0); if (x < 0) x = 0; if (y < 0) y = 0; if (x1 > tw) x1 = tw; if (y1 > th) y1 = th;
+  for (let j = y; j < y1; j++) tb.fill(c, j * tw + x, j * tw + x1);
+}
+function drect(x, y, w, h, c, level) {     // dithered rect: c over whatever is there, at level/16 coverage
+  x |= 0; y |= 0; for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) if (i >= 0 && j >= 0 && i < tw && j < th && dith(i, j, level)) tb[j * tw + i] = c;
+}
+function disc(cx, cy, r, c) { cx |= 0; cy |= 0; for (let dy = -r; dy <= r; dy++) { const hw = Math.floor(Math.sqrt(r * r - dy * dy + r * 0.6)); for (let dx = -hw; dx <= hw; dx++) px(cx + dx, cy + dy, c); } }
+function line(x0, y0, x1, y1, c, t) {      // Bresenham with a t×t square brush
+  x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, o = (t - 1) >> 1; let e = dx + dy;
+  for (let n = 0; n < 512; n++) {
+    for (let j = 0; j < t; j++) for (let i = 0; i < t; i++) px(x0 + i - o, y0 + j - o, c);
+    if (x0 === x1 && y0 === y1) break; const e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; }
+  }
+}
+
+/* ---------- 3x5 PIXEL FONT (no strings built per frame: draw literals, or numbers via num()) ---------- */
+const FONT = new Uint16Array(128);
+const GLYPHS = 'A.#.#.#####.##.#B##.#.###.#.###.C.###..#..#...##D##.#.##.##.###.E####..##.#..###F####..##.#..#..G.###..#.##.#.##H#.##.#####.##.#I###.#..#..#.###J..#..#..##.#.#.K#.##.###.#.##.#L#..#..#..#..###M#.########.##.#N##.#.##.##.##.#O.#.#.##.##.#.#.P##.#.###.#..#..Q.#.#.##.###..##R##.#.###.#.##.#S.###...#...###.T###.#..#..#..#.U#.##.##.##.####V#.##.##.##.#.#.W#.##.########.#X#.##.#.#.#.##.#Y#.##.#.#..#..#.Z###..#.#.#..###0####.##.##.####1.#.##..#..#.###2##...#.#.#..###3##...#.#...###.4#.##.####..#..#5####..##...###.6.###..####.####7###..#.#..#..#.8####.#####.####9####.####..###...............#.!.#..#..#.....#.:....#.....#....-......###......';
+for (let i = 0; i < GLYPHS.length; i += 16) { let m = 0; for (let k = 0; k < 15; k++) if (GLYPHS.charCodeAt(i + 1 + k) === 35) m |= 1 << k; FONT[GLYPHS.charCodeAt(i)] = m; }
+function text(s, x, y, c, sh) {            // s must be a literal or cached string; sh = shadow index or -1
+  for (let i = 0, cx = x; i < s.length; i++, cx += 4) {
+    let code = s.charCodeAt(i); if (code >= 97 && code <= 122) code -= 32; const m = FONT[code & 127];
+    for (let k = 0; k < 15; k++) if (m & (1 << k)) { if (sh >= 0) px(cx + k % 3 + 1, y + ((k / 3) | 0) + 1, sh); px(cx + k % 3, y + ((k / 3) | 0), c); }
+  }
+}
+const DIGIT = new Uint16Array(10); for (let d = 0; d < 10; d++) DIGIT[d] = 48 + d;
+function num(n, x, y, digits, c, sh) {     // right-aligned, zero-padded; no toString()
+  n = Math.max(0, n | 0);
+  for (let i = digits - 1; i >= 0; i--) { const m = FONT[48 + (n % 10)], cx = x + i * 4; n = (n / 10) | 0;
+    for (let k = 0; k < 15; k++) if (m & (1 << k)) { if (sh >= 0) px(cx + k % 3 + 1, y + ((k / 3) | 0) + 1, sh); px(cx + k % 3, y + ((k / 3) | 0), c); } }
+}
+
+/* ---------- WORLD + PARALLAX LAYERS (pre-rendered once into indexed buffers) ---------- */
+const WORLD = 480, LW = 640;               // world width; layers wrap at LW
+const HORIZON = 120;
+const sky = new Uint8Array(W * H);
+const farL = new Uint8Array(LW * H).fill(TRANSPARENT), nearL = new Uint8Array(LW * H).fill(TRANSPARENT);
+function hash(n) { n = (n | 0) * 374761393 + 668265263 | 0; n = Math.imul(n ^ n >>> 13, 1274126177); return ((n ^ n >>> 16) >>> 0) / 4294967296; }
+function ridge(x, base, amp, seed) { const t = x / LW * Math.PI * 2; return base - amp * (0.6 * Math.sin(t * 2 + seed) + 0.3 * Math.sin(t * 5 + seed * 2) + 0.15 * Math.sin(t * 11 + seed * 3)); }
+function buildLayers() {
+  target(sky, W, H);
+  for (let y = 0; y < H; y++) {             // 5-step sky ramp, dithered only across each seam
+    const t = Math.min(1, y / HORIZON) * 4, i = Math.min(3, t | 0), f = t - i;
+    for (let x = 0; x < W; x++) sky[y * W + x] = dith(x, y, Math.round(Math.max(0, Math.min(1, (f - 0.5) * 2.5 + 0.5)) * 16)) ? C.SKY0 + i + 1 : C.SKY0 + i;
+  }
+  const sx = 230, sy = 104, sr = 12;         // low sun with a dithered halo
+  for (let y = -sr * 2; y <= sr * 2; y++) for (let x = -sr * 2; x <= sr * 2; x++) { const d = Math.hypot(x, y);
+    if (d <= sr) px(sx + x, sy + y, y > 4 && (y % 3 === 0) ? C.GLOW : C.SUN);
+    else if (d < sr * 1.8 && dith(sx + x, sy + y, Math.round(10 * (1 - (d - sr) / (sr * 0.8))))) px(sx + x, sy + y, C.GLOW); }
+  target(farL, LW, H);
+  for (let x = 0; x < LW; x++) { const top = ridge(x, HORIZON - 14, 12, 1) | 0;
+    for (let y = top; y < H; y++) farL[y * LW + x] = (y - top < 4 && dith(x, y, 9)) ? C.FAR0 + 2 : y > HORIZON ? C.FAR0 : C.FAR0 + 1; }
+  target(nearL, LW, H);
+  for (let x = 0; x < LW; x++) { const top = ridge(x, HORIZON + 4, 9, 4) | 0;
+    for (let y = top; y < H; y++) nearL[y * LW + x] = (y - top < 2) ? C.NEAR0 + 2 : (y - top < 6 && dith(x, y, 6)) ? C.NEAR0 + 1 : C.NEAR0; }
+  target(fb, W, H);
+}
+function blitLayer(L, scroll, y0) {          // wraps horizontally, skips TRANSPARENT
+  const o = ((Math.round(scroll) % LW) + LW) % LW;
+  for (let y = y0; y < H; y++) { const row = y * LW, dst = y * W; for (let x = 0; x < W; x++) { const c = L[row + ((x + o) % LW)]; if (c !== TRANSPARENT) fb[dst + x] = c; } }
+}
+const GROUND_Y = 150;
+function drawGround(camX) {                // yard, parallax 1.0
+  for (let y = GROUND_Y; y < H; y++) { const d = y - GROUND_Y;
+    for (let x = 0; x < W; x++) { const wx = x + camX;
+      let c;
+      if (d < 1) c = C.GRASS0 + 3;                                            // sunlit lip
+      else if (d < 3) c = dith(wx, y, 8) ? C.GRASS0 + 3 : C.GRASS0 + 2;
+      else if (d < 7) c = C.GRASS0 + 2;
+      else if (d < 10) c = dith(wx, y, 16 - (d - 7) * 5) ? C.GRASS0 + 2 : C.GRASS0 + 1;
+      else if (d < 12) c = C.GRASS0 + 1;
+      else if (d < 18) c = hash(wx * 7 + y * 13) < 0.18 ? C.SOIL0 + 2 : (d === 12 || d === 17) ? C.SOIL0 : C.SOIL0 + 1;   // path
+      else c = dith(wx, y, Math.max(0, 12 - (d - 18) * 3)) ? C.GRASS0 + 1 : C.GRASS0;
+      fb[y * W + x] = c; } }
+  for (let i = Math.floor(camX / 7); i < (camX + W) / 7 + 1; i++) {   // grass tufts sway 1px on a slow breeze
+    if (hash(i) < 0.5) continue; const x = i * 7 - camX + ((hash(i * 3) * 5) | 0), sway = ((Math.sin(tick / 50 + i) > 0.6) ? 1 : 0);
+    px(x, GROUND_Y - 1, C.GRASS0 + 2); px(x + sway, GROUND_Y - 2, C.GRASS0 + 3);
+  }
+}
+function drawForeground(camX) {            // out-of-focus near-black framing, parallax 1.4: sells depth
+  const fx = Math.round(camX * 1.4);
+  for (let i = Math.floor(fx / 23) - 1; i < (fx + W) / 23 + 1; i++) {
+    if (hash(i * 5) < 0.45) continue;
+    const bx = i * 23 - fx + ((hash(i) * 12) | 0), hgt = 10 + ((hash(i * 9) * 16) | 0), sway = Math.sin(tick / 70 + i) > 0.3 ? 1 : 0;
+    for (let k = 0; k < 4; k++) { const lx = bx + k * 3, lh = hgt - ((hash(i * 3 + k) * 8) | 0);
+      for (let y = 0; y < lh; y++) { const lean = y > lh * 0.6 ? sway + (k & 1 ? 1 : -1) : 0; px(lx + lean, H - 1 - BAR - y, C.INK); px(lx + lean + 1, H - 1 - BAR - y, C.INK); } }
+  }
+}
+/* ---------- PARTICLES: pooled struct-of-arrays, never allocates ---------- */
+const PMAX = 256;
+const P_x = new Float32Array(PMAX), P_y = new Float32Array(PMAX), P_vx = new Float32Array(PMAX), P_vy = new Float32Array(PMAX);
+const P_life = new Float32Array(PMAX), P_max = new Float32Array(PMAX), P_g = new Float32Array(PMAX);
+const P_free = new Int16Array(PMAX); let P_nfree = PMAX; for (let i = 0; i < PMAX; i++) P_free[i] = PMAX - 1 - i;
+const P_on = new Uint8Array(PMAX);
+function spawn(x, y, vx, vy, life, g) {
+  if (P_nfree === 0) return; const i = P_free[--P_nfree];
+  P_on[i] = 1; P_x[i] = x; P_y[i] = y; P_vx[i] = vx; P_vy[i] = vy; P_life[i] = 0; P_max[i] = life; P_g[i] = g;
+}
+function updateParticles(dt) {
+  for (let i = 0; i < PMAX; i++) { if (!P_on[i]) continue;
+    P_life[i] += dt; if (P_life[i] >= P_max[i]) { P_on[i] = 0; P_free[P_nfree++] = i; continue; }
+    P_vy[i] += P_g[i] * dt; P_x[i] += P_vx[i] * dt; P_y[i] += P_vy[i] * dt; }
+}
+function drawParticles(camX) {
+  for (let i = 0; i < PMAX; i++) { if (!P_on[i]) continue;
+    const age = P_life[i] / P_max[i], c = SPARK_RAMP[Math.min(3, (age * 4) | 0)];
+    px(Math.round(P_x[i] - camX), Math.round(P_y[i]), c); }
+}
+
+/* ---------- CHARACTER: procedural rig → sprite buffer → rim + outline → blit ---------- */
+const SW = 32, SH = 46, spr = new Uint8Array(SW * SH), sprM = new Uint8Array(SW * SH);
+// smooth pose (eased every tick) and the displayed pose (sampled at 12 fps, snapped to pixels)
+const pose = { lean: 0, legA: 0, legB: 0, kneeA: 0, kneeB: 0, armA: 0, armB: 0, elbA: 0, elbB: 0, bob: 0, head: 0, scarf: 0 };
+const shown = { lean: 0, legA: 0, legB: 0, kneeA: 0, kneeB: 0, armA: 0, armB: 0, elbA: 0, elbB: 0, bob: 0, head: 0, scarf: 0 };
+const SAMPLE_TICKS = 5;                      // 60 Hz / 5 = 12 fps pose sampling
+function samplePose() { for (const k in pose) shown[k] = pose[k]; }   // for-in over a fixed literal: no allocation
+const J = new Float64Array(2);               // scratch joint result (typed array: no boxing)
+function joint(ax, ay, ang, len) { J[0] = Math.round(ax + Math.sin(ang) * len); J[1] = Math.round(ay + Math.cos(ang) * len); }   // snapped: joints land on pixels
+function drawHeroSprite(lightDir) {      // lightDir: +1 = key light on the sprite's right, -1 = left
+  spr.fill(TRANSPARENT); target(spr, SW, SH);
+  const p = shown, ox = 16, hipY = 31 + Math.round(p.bob);
+  const shX = ox + Math.round(Math.sin(p.lean) * 10), shY = hipY - 10;
+  // painter's order = depth: far leg, far arm (shadow shades) → cape/scarf → torso → head → near leg, near arm
+  joint(ox, hipY, p.legB, 6); const kbx = J[0], kby = J[1]; joint(kbx, kby, p.legB + p.kneeB, 6);
+  line(ox, hipY, kbx, kby, C.TUNIC0, 3); line(kbx, kby, J[0], J[1], C.BOOT, 2); px(J[0] + 1, J[1], C.BOOT);
+  joint(shX, shY + 1, p.armB, 5); const ebx = J[0], eby = J[1]; joint(ebx, eby, p.armB + p.elbB, 4);
+  line(shX, shY + 1, ebx, eby, C.TUNIC0, 2); line(ebx, eby, J[0], J[1], C.SKIN0, 2);
+  const sw = Math.round(p.scarf);                                   // scarf trails behind and sways
+  line(shX - 1, shY, shX - 6, shY + 1 + sw, C.SCARF0 + 1, 2); line(shX - 6, shY + 1 + sw, shX - 10, shY + 3 - sw, C.SCARF0, 2);
+  line(ox, hipY - 1, shX, shY + 1, C.TUNIC0 + 1, 6);                // torso (mid tone)
+  line(ox + 2, hipY - 2, shX + 2, shY + 2, C.TUNIC0 + 2, 1);        // front plane catches fill light
+  line(ox - 2, hipY - 2, shX - 2, shY + 2, C.TUNIC0, 1);            // back plane in shadow
+  rect(ox - 3, hipY - 2, 7, 1, C.BELT); px(ox + 1, hipY - 2, C.GLOW);
+  const hdx = shX + Math.round(Math.sin(p.lean + p.head) * 4) + 1, hdy = shY - 4;
+  disc(hdx, hdy, 3, C.SKIN0 + 1); px(hdx - 2, hdy + 1, C.SKIN0); px(hdx - 1, hdy + 2, C.SKIN0);   // jaw in shadow
+  px(hdx + 2, hdy - 1, C.OUTLINE); px(hdx + 3, hdy + 1, C.SKIN0 + 1);                             // eye, nose
+  for (let i = -3; i <= 2; i++) { px(hdx + i, hdy - 3, C.BOOT); px(hdx + i - 1, hdy - 2, C.BOOT); } // hair
+  px(hdx - 4, hdy - 1, C.BOOT); px(hdx - 4, hdy, C.BOOT);
+  line(shX - 1, shY - 1, shX + 2, shY - 1, C.SCARF0 + 1, 2);                                      // scarf knot
+  joint(ox, hipY, p.legA, 6); const kax = J[0], kay = J[1]; joint(kax, kay, p.legA + p.kneeA, 6);
+  line(ox, hipY, kax, kay, C.TUNIC0 + 1, 3); line(kax, kay, J[0], J[1], C.BOOT, 2); px(J[0] + 1, J[1], C.BOOT); px(J[0] + 2, J[1], C.BOOT);
+  joint(shX, shY + 1, p.armA, 5); const eax = J[0], eay = J[1]; joint(eax, eay, p.armA + p.elbA, 4);
+  line(shX, shY + 1, eax, eay, C.TUNIC0 + 2, 2); line(eax, eay, J[0], J[1], C.SKIN0 + 2, 2);
+  // Rim light: an edge pixel facing the key light, but only where the shape is at least 2px deep,
+  // so thin details keep their own colour instead of turning into a solid stripe.
+  for (let i = 0; i < spr.length; i++) sprM[i] = spr[i] !== TRANSPARENT ? 1 : 0;
+  for (let y = 1; y < SH - 1; y++) for (let x = 1; x < SW - 1; x++) { const i = y * SW + x;
+    if (sprM[i] && !sprM[i + lightDir] && sprM[i - lightDir] && (sprM[i - SW] || sprM[i + SW])) spr[i] = C.RIM; }
+  // 1px dark outline around the silhouette
+  for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) { const i = y * SW + x; if (sprM[i]) continue;
+    if ((x > 0 && sprM[i - 1]) || (x < SW - 1 && sprM[i + 1]) || (y > 0 && sprM[i - SW]) || (y < SH - 1 && sprM[i + SW])) spr[i] = C.OUTLINE; }
+  target(fb, W, H);
+}
+function blitSprite(sx, sy, flip) {          // (sx,sy) = feet; flip mirrors horizontally
+  sx = Math.round(sx) - 16; sy = Math.round(sy) - 43;
+  for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) { const c = spr[y * SW + (flip ? SW - 1 - x : x)]; if (c !== TRANSPARENT) px(sx + x, sy + y, c); }
+}
+function castShadow(sx, sy, len) {           // long cool shadow stretching away from the low sun
+  for (let i = 0; i < len; i++) for (let j = 0; j < 2; j++) if (dith(Math.round(sx) - 3 - i, sy + j, 14 - ((i * 12 / len) | 0))) px(Math.round(sx) - 3 - i, sy + j, C.GRASS0 + 1);
+}
+
+/* ---------- STATE MACHINE (looping), eased keyframes ---------- */
+const S_WALK = 0, S_STOP = 1, S_CAST = 2, S_RECOVER = 3;
+const DUR = new Float32Array([4.0, 0.5, 1.6, 0.9]);
+const hero = { x: 120, dir: 1, state: S_WALK, t: 0, phase: 0 };
+const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const lerp = (a, b, t) => a + (b - a) * t;
+function setPoseWalk(ph, k) {               // k blends from rest (0) to full stride (1)
+  const s = Math.sin(ph), c = Math.cos(ph);
+  pose.lean = lerp(0, 0.12, k); pose.legA = 0.6 * s * k + 0.18 * (1 - k); pose.legB = -0.6 * s * k - 0.18 * (1 - k);   // rest = slight stance pose.kneeA = -Math.max(0, -c) * 0.9 * k; pose.kneeB = -Math.max(0, c) * 0.9 * k;
+  pose.armA = -0.5 * s * k; pose.armB = 0.5 * s * k; pose.elbA = 0.5 * k; pose.elbB = 0.5 * k; pose.bob = -Math.abs(c) * k; pose.head = 0;
+}
+function step(dt) {
+  tick++; hero.t += dt;
+  const T = hero.t / DUR[hero.state], e = ease(Math.min(1, T));
+  switch (hero.state) {
+    case S_WALK: hero.x += hero.dir * 22 * dt; hero.phase += dt * 7; setPoseWalk(hero.phase, 1);
+      if (hero.t > DUR[S_WALK]) next(S_STOP); break;
+    case S_STOP: setPoseWalk(hero.phase, 1 - e); if (T >= 1) next(S_CAST); break;
+    case S_CAST: { // anticipation (crouch) → raise arms → hold while sparks spiral in → release burst
+      const up = ease(Math.min(1, Math.max(0, (T - 0.15) / 0.35)));
+      pose.lean = lerp(0.15, -0.1, up); pose.armA = lerp(0.3, 2.8, up); pose.armB = lerp(-0.3, 2.5, up); pose.elbA = pose.elbB = lerp(0.6, 0.1, up);
+      pose.bob = T < 0.15 ? 1 : 0; pose.head = lerp(0, -0.3, up);
+      if (T > 0.4 && T < 0.9 && (tick & 1)) { const a = tick * 0.7, r = 14 * (1 - (T - 0.4) * 2); spawn(hero.x + Math.cos(a) * r, GROUND_Y - 32 + Math.sin(a) * r * 0.6, -Math.cos(a) * 20, -Math.sin(a) * 12, 0.3, 0); }
+      if (T >= 1) { for (let i = 0; i < 40; i++) { const a = i / 40 * Math.PI * 2, v = 40 + hash(tick + i) * 60; spawn(hero.x, GROUND_Y - 32, Math.cos(a) * v, Math.sin(a) * v - 30, 0.5 + hash(i) * 0.4, 120); } G[SHAKE] = 2; next(S_RECOVER); }
+      break; }
+    case S_RECOVER: pose.armA = lerp(2.8, 0, e); pose.armB = lerp(2.5, 0, e); pose.elbA = pose.elbB = lerp(0.1, 0.5, e); pose.lean = lerp(-0.1, 0, e); pose.head = lerp(-0.3, 0, e); pose.bob = 0;
+      if (T >= 1) { if (hero.x > WORLD - 140 || hero.x < 140) hero.dir = -hero.dir; next(S_WALK); } break;
+  }
+  pose.scarf = Math.sin(tick / 9) * 1.5 + (hero.state === S_WALK ? 1 : 0);
+  if (tick % SAMPLE_TICKS === 0) samplePose();
+  updateParticles(dt);
+  if (G[SHAKE] > 0) G[SHAKE] = Math.max(0, G[SHAKE] - dt * 8);
+  // camera: eased toward a rule-of-thirds framing ahead of the hero, quantized when drawn
+  const want = Math.max(0, Math.min(WORLD - W, hero.x - (hero.dir > 0 ? W / 3 : (2 * W) / 3)));
+  G[CAM] += (want - G[CAM]) * Math.min(1, dt * 1.5);
+}
+function next(s) { hero.state = s; hero.t = 0; }
+
+/* ---------- RENDER ---------- */
+// Mutable float state lives in a typed array: a module-level `let` holding a double is boxed
+// (one heap allocation per write); a Float64Array slot is not.
+const G = new Float64Array(4); const CAM = 0, SHAKE = 1, ACC = 2, LAST = 3;
+let tick = 0;                              // integers (Smis) in a let are fine
+function render() {
+  const cx = Math.round(G[CAM]) + (G[SHAKE] > 0 ? ((tick & 2) ? 1 : -1) * Math.round(G[SHAKE]) : 0);
+  fb.set(sky);                                             // sky (parallax 0: static)
+  blitLayer(farL, cx * 0.25, HORIZON - 30);                // far hills
+  blitLayer(nearL, cx * 0.5, HORIZON - 10);                // near hills
+  drawGround(cx);                                          // yard (1.0)
+  castShadow(hero.x - cx, GROUND_Y, 14);
+  drawHeroSprite(hero.dir < 0 ? -1 : 1);                   // sun is world-right; flip the light with the sprite
+  blitSprite(hero.x - cx, GROUND_Y, hero.dir < 0);
+  drawParticles(cx);
+  drawForeground(cx);
+  for (let y = 0; y < BAR; y++) { fb.fill(C.INK, y * W, (y + 1) * W); fb.fill(C.INK, (H - 1 - y) * W, (H - y) * W); }
+  text('PIXEL TEMPLATE', 4, BAR + 4, C.UI, C.UISH);
+  num(tick / 60, W - 4 - 5 * 4, BAR + 4, 5, C.UI, C.UISH);
+  present();
+}
+
+/* ---------- LOOP: fixed 60 Hz update, rAF render ---------- */
+const STEP = 1 / 60;
+function frame(now) {
+  if (!G[LAST]) G[LAST] = now;
+  G[ACC] += Math.min(0.1, (now - G[LAST]) / 1000); G[LAST] = now;
+  let n = 0; while (G[ACC] >= STEP && n < 5) { step(STEP); G[ACC] -= STEP; n++; }
+  if (n === 5) G[ACC] = 0;
+  render();
+  requestAnimationFrame(frame);
+}
+
+buildLayers(); samplePose();
+// lint hook for tools/pixel-lint.mjs
+window.PIXEL = { canvas: off, palette: PAL, scenes: {
+  walk: () => { next(S_WALK); }, cast: () => { next(S_STOP); },
+} };
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
