@@ -6,6 +6,7 @@ A monorepo of single-file browser games. Play them at **https://jchandra74.githu
 
 | Game | Folder | Description |
 |---|---|---|
+| [Iron Comet](https://jchandra74.github.io/claude_play/games/iron-comet/) | `games/iron-comet/` | 8-bit rooftop brawler on a runaway train, inspired by the ZX Spectrum classic Stop the Express. Procedural pixel sprites, chiptune soundtrack, four stages and a boss. Landscape with an on-screen d-pad on phones; keyboard on desktop. |
 | [The Lantern Keeper](https://jchandra74.github.io/claude_play/games/lantern-keeper/) | `games/lantern-keeper/` | Comedic JRPG demo with HD-2D style lighting, turn-based Break & Boost battles and a drag d-pad. Best in landscape on a phone; keyboard on desktop. |
 | [Neon Breaker](https://jchandra74.github.io/claude_play/games/neon-breaker/) | `games/neon-breaker/` | Synthwave brick-breaker with bosses, power-ups, combos and a live-synthesised soundtrack. Mouse, keyboard or touch. |
 
@@ -26,4 +27,4 @@ games/<slug>/cover.jpg     # 16:9 cover image shown in the catalogue (1280x720)
 
 ## Publishing
 
-GitHub Pages serves the `gh-pages` branch, which mirrors this layout (catalogue at the root, games under `games/`).
+GitHub Pages serves the `main` branch as-is (catalogue at the root, games under `games/`; `.nojekyll` keeps it a plain static site). Merging to `main` publishes.
