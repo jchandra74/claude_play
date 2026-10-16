@@ -310,8 +310,19 @@ function facadeTexture(Wm, Hm, style, openings, seed, opts = {}) {
   return t;
 }
 
+// Facades get a gentler version of the roof's sky sheen: pale plaster reads as moonlit blue-grey against
+// dark timber (the half-timber pattern stays legible on the walls that face away from the moon).
 function facadeMat(tex) {
-  return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 });
+  const m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 });
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `{
+      float tl = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+      outgoingLight += vec3(tl) * vec3(0.07, 0.1, 0.16) * smoothstep(0.08, 0.5, tl);
+    }
+    #include <opaque_fragment>`);
+  };
+  m.customProgramCacheKey = () => 'facadesheen';
+  return m;
 }
 
 // A wall plane in house-local space. side: 'f','b','r','l'. y0/hgt in metres, W/D = box extents.
@@ -327,7 +338,7 @@ function wallFace(side, W, D, y0, hgt, tex) {
 
 // Painted shingle slope: individual shingles with per-shingle tone, shadow lines under each course,
 // a doubled dark eave course, sun-bleached and mossy patches, a darker band under the ridge.
-const RPX = 48;
+const RPX = 30;   // chunky: one shingle texel stays >= ~1.5 screen px on the back rows of the hero shot
 function roofTexture(lenM, slopeM, tint, seed) {
   const w = Math.max(16, Math.round(lenM * RPX)), h = Math.max(16, Math.round(slopeM * RPX));
   const c = document.createElement('canvas'); c.width = w; c.height = h;
@@ -335,7 +346,7 @@ function roofTexture(lenM, slopeM, tint, seed) {
   const R = rng(seed), N = vnoise(R);
   const base = new THREE.Color(tint);
   const br = base.r * 255, bg = base.g * 255, bb = base.b * 255;
-  const rowH = 8;
+  const rowH = 6;
   const img = g.createImageData(w, h), D = img.data;
   const put = (x, y, r, gg, b) => { if (x < 0 || y < 0 || x >= w || y >= h) return; const o = (y * w + x) * 4; D[o] = r; D[o + 1] = gg; D[o + 2] = b; D[o + 3] = 255; };
   // canvas y = 0 is the ridge, y = h the eave
@@ -343,10 +354,10 @@ function roofTexture(lenM, slopeM, tint, seed) {
     const y0 = h - (row + 1) * rowH;          // courses laid from the eave up
     let x = -Math.floor(R() * 10);
     while (x < w) {
-      const sw = 7 + Math.floor(R() * 6);
-      let k = 0.8 + R() * 0.3;
+      const sw = 4 + Math.floor(R() * 4);
+      let k = 0.8 + R() * 0.28;
       const rr = R();
-      if (rr < 0.06) k *= 0.62; else if (rr > 0.95) k *= 1.22;
+      if (rr < 0.06) k *= 0.6; else if (rr > 0.95) k *= 1.22;
       const mossN = N(x / 30, (y0 + h) / 18) * 0.7 + N(x / 9 + 5, y0 / 7) * 0.3;
       const lowBias = (y0 / h);
       const moss = mossN + lowBias * 0.22 > 0.78;
@@ -356,15 +367,16 @@ function roofTexture(lenM, slopeM, tint, seed) {
         let r = br * k, gg = bg * k, b = bb * k;
         // grain streak + bottom-edge highlight + rounded bottom corners
         if ((xx * 5 + row * 3) % 7 === 0) { r *= 0.9; gg *= 0.9; b *= 0.9; }
-        if (yy >= rowH) { r *= 1.18; gg *= 1.14; b *= 1.1; }
+        if (yy >= rowH) { r *= 1.32; gg *= 1.26; b *= 1.2; }           // lit butt edge of each shingle
+        if (xx === 0 && yy >= 2 && yy < rowH) { r *= 1.12; gg *= 1.1; b *= 1.08; }
         if (yy >= rowH + 1 && (xx === 0 || xx === sw - 1)) continue;
-        if (yy < 2) { r *= 0.55; gg *= 0.55; b *= 0.58; }   // shadow from the course above
+        if (yy < 2) { r *= 0.42; gg *= 0.42; b *= 0.48; }   // shadow from the course above
         if (bleach) { r = r * 0.85 + 26; gg = gg * 0.85 + 22; b = b * 0.85 + 18; }
         if (moss && ((px + py) & 1 || mossN > 0.86)) { r = r * 0.45 + 30; gg = gg * 0.55 + 56; b = b * 0.4 + 18; }
         put(px, py, r, gg, b);
       }
       // gap between shingles
-      for (let yy = 2; yy < rowH; yy++) put(x + sw - 1, y0 + yy, br * 0.35, bg * 0.32, bb * 0.32);
+      for (let yy = 2; yy < rowH; yy++) put(x + sw - 1, y0 + yy, br * 0.28, bg * 0.25, bb * 0.27);
       x += sw;
     }
   }
@@ -372,13 +384,30 @@ function roofTexture(lenM, slopeM, tint, seed) {
   // eave course: doubled, darker drip edge; ridge band
   g.fillStyle = 'rgba(20,10,6,0.45)'; g.fillRect(0, h - 3, w, 3);
   g.fillStyle = 'rgba(20,10,6,0.25)'; g.fillRect(0, h - rowH - 2, w, 2);
-  const rg = g.createLinearGradient(0, 0, 0, 14);
+  const rg = g.createLinearGradient(0, 0, 0, 9);
   rg.addColorStop(0, 'rgba(18,10,8,0.55)'); rg.addColorStop(1, 'rgba(18,10,8,0)');
-  g.fillStyle = rg; g.fillRect(0, 0, w, 14);
+  g.fillStyle = rg; g.fillRect(0, 0, w, 9);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.magFilter = THREE.NearestFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = 4;
   return t;
+}
+
+// Shingle slopes face away from the moon in the hero shot, so on pure physics they are a dark slab.
+// HD-2D keeps them readable: a cool sky sheen proportional to the texel's own value (so the lit shingle
+// butts and the dark course shadows keep their contrast) plus a faint moon-silver on the brightest texels.
+function roofTopMat(tex) {
+  const m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `{
+      float tl = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+      outgoingLight += mix(diffuseColor.rgb, vec3(tl), 0.55) * vec3(0.13, 0.17, 0.26) * 0.9;
+      outgoingLight += vec3(0.05, 0.075, 0.12) * smoothstep(0.18, 0.4, tl);
+    }
+    #include <opaque_fragment>`);
+  };
+  m.customProgramCacheKey = () => 'roofsheen';
+  return m;
 }
 
 // Roof with ridge along local x. span = wall depth (z), len = wall width (x)
@@ -397,7 +426,7 @@ function roof(len, span, yTop, tint, gableOpts, oh = 0.5, ohEnd = 0.38) {
     const geo = new THREE.BoxGeometry(len + ohEnd * 2, th, slopeLen);
     if (side < 0) geo.rotateY(Math.PI);            // keep v = 0 (canvas bottom = eave) at the low edge
     const tex = roofTexture(len + ohEnd * 2, slopeLen, tint, (gableOpts.seed || 1) * 13 + side * 5 + 101);
-    const top = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+    const top = roofTopMat(tex);
     const m = new THREE.Mesh(geo, [edgeMat, edgeMat, top, underMat, edgeMat, edgeMat]);
     m.castShadow = true; m.receiveShadow = true;
     m.rotation.x = side * a;
@@ -461,6 +490,7 @@ function roof(len, span, yTop, tint, gableOpts, oh = 0.5, ohEnd = 0.38) {
   return g;
 }
 
+function glowWinTop(h) { return h.light ? 4.2 : 2.6; }
 function decalW(name, h) { const [w, hh] = size(name); return h * w / hh; }
 
 function buildHouse(h, ctx) {
@@ -535,6 +565,14 @@ function buildHouse(h, ctx) {
   else r = roof(Wt, Dt, yTop + 0.06, h.roof, { ...gOpts, openings: [] });
   g.add(r);
   const rise = r.userData.rise;
+  // attic window in the front gable (two-storey gable-front houses that face the plaza): a lit pane
+  // high on the facade so the back row of the village carries readable window light up into the roofs
+  if (two && h.gableFront && Math.abs(h.rot) < 0.5) {
+    const aw = makeDecal('window_lattice', winH * 0.62, { emissive: true, emissiveIntensity: glowWinTop(h), emissiveOpts: { threshold: 0.5 }, castShadow: false });
+    aw.position.set(0, yTop + 0.42, Dt / 2 + 0.07);
+    g.add(aw);
+    ctx.halos.push({ obj: aw, y: aw.position.y + winH * 0.31, strength: h.light ? 0.85 : 0.5, size: 1.0 });
+  }
   // chimney
   if (h.chimney) {
     const [cx, cz] = h.chimney;

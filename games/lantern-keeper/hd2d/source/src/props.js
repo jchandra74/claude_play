@@ -6,6 +6,7 @@ import { makeSprite, tileTex, spriteTex, size as imgSize } from './assets.js';
 import { groundY, levelAtCell, isNearCliffTop, isNearCliffBase } from './terrain.js';
 import { worldUV } from './geom.js';
 import { quality } from './config.js';
+import { lanternLevelU } from './lighting.js';
 
 // ---- one shared pixel grid ----
 // Every sprite exists as a ladder of pre-scaled variants (assets/pxgrid.py -> native/px_<name>_<H>.png);
@@ -97,6 +98,48 @@ const SPRITE_OPTS = {
   pine: { selfLight: 0.03 },
 };
 
+// ---- foreground framing trees: Octopath keeps colour, shape and rim light in its blurred foreground.
+// A wide warm rim on the silhouette side that faces the plaza lamps (found by probing the texture
+// alpha a few texels toward the light; it survives the heavy near-field blur as a glowing edge),
+// low-frequency hue drift between deep teal and moss green, a cool moon sheen on the upper needles,
+// and a warm under-glow from the lit ledge below. The rim follows the lantern level.
+function foregroundTreeMaterial(name, rimDir) {
+  const map = spriteTex(name);
+  const [tw, th] = imgSize(name);
+  const m = new THREE.MeshStandardMaterial({ map, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1, metalness: 0 });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uTexel = { value: new THREE.Vector2(1 / tw, 1 / th) };
+    sh.uniforms.uRimDir = { value: rimDir };
+    sh.uniforms.uLan = lanternLevelU;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec2 uTexel; uniform float uRimDir, uLan;')
+      .replace('#include <opaque_fragment>', `{
+        vec3 tex = diffuseColor.rgb;
+        float rim = 0.0;
+        for (int i = 1; i <= 4; i++) {
+          float o = float(i * i) * 1.6;
+          float a = texture2D(map, vMapUv + vec2(uRimDir * o * uTexel.x, o * 0.35 * uTexel.y)).a;
+          rim = max(rim, (1.0 - step(0.5, a)) * (1.0 - float(i - 1) * 0.2));
+        }
+        float topEdge = 1.0 - step(0.5, texture2D(map, vMapUv + vec2(0.0, 3.0 * uTexel.y)).a);
+        float hv = sin(vMapUv.x * 7.0 + vMapUv.y * 5.0) * 0.5 + sin(vMapUv.y * 13.0 - vMapUv.x * 3.0) * 0.5;
+        vec3 hue = mix(vec3(0.02, 0.05, 0.065), vec3(0.04, 0.065, 0.03), 0.5 + 0.5 * hv);
+        float lum = dot(tex, vec3(0.3, 0.59, 0.11));
+        vec3 col = outgoingLight * 0.7 + hue * (0.35 + lum * 1.6);
+        // warm lamp rim on the plaza-facing side, brightest low down where the lamps are
+        float low = 1.0 - smoothstep(0.15, 0.85, vMapUv.y);
+        col += vec3(1.0, 0.42, 0.12) * rim * (0.15 + 0.85 * low * low) * (0.16 + 0.8 * lum) * (0.3 + 0.7 * uLan);
+        // cool moon sheen on the upper needles, warm glow from the lit ledge at the foot
+        col += vec3(0.1, 0.16, 0.28) * topEdge * smoothstep(0.4, 0.9, vMapUv.y) * (0.3 + lum);
+        col += vec3(0.16, 0.08, 0.03) * smoothstep(0.35, 0.0, vMapUv.y) * (0.3 + lum) * (0.3 + 0.7 * uLan);
+        outgoingLight = col;
+      }
+      #include <opaque_fragment>`);
+  };
+  m.customProgramCacheKey = () => 'fgtree';
+  return m;
+}
+
 function placeSprite(group, type, x, z, h, yaw, extra = {}) {
   const y = extra.y ?? groundY(x, z);
   const name = extra.native ? type : pxName(type, h);
@@ -154,10 +197,12 @@ function clumpMaterial(v) {
   const m = new THREE.MeshStandardMaterial({ map, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1, metalness: 0 });
   m.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec3 aNrm; attribute float aHi; varying float vHi;')
-      .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = aNrm; vHi = aHi;');
+      .replace('#include <common>', '#include <common>\nattribute vec3 aNrm; attribute float aHi; attribute float aRim; uniform float uLan; varying float vHi; varying vec3 vRim;')
+      .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = aNrm; vHi = aHi * mix(0.55, 1.0, uLan); vRim = vec3(1.0, 0.56, 0.22) * aRim * 1.1 * uLan;');
+    sh.uniforms.uLan = lanternLevelU;
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vHi;')
+      .replace('#include <common>', '#include <common>\nvarying float vHi; varying vec3 vRim; uniform float uLan;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.rgb += vRim * texture2D(map, vMapUv).rgb;')
       .replace('#include <opaque_fragment>', `{
         vec3 tx = texture2D(map, vMapUv).rgb;
         float lum = dot(tx, vec3(0.3, 0.6, 0.1));
@@ -166,7 +211,8 @@ function clumpMaterial(v) {
         // highlight clusters pick up a pale moon-gold sheen rather than just brighter green
         lit += vHi * hiMask * vec3(0.035, 0.05, 0.05);
         // night: keep the crown's greens muted (no lime) so the lantern stays the warmest, most saturated thing
-        lit = mix(vec3(dot(lit, vec3(0.3, 0.59, 0.11))), lit, 0.78) * 0.9;
+        // with the Great Lantern out the crowns sink back into cold moonlight
+        lit = mix(vec3(dot(lit, vec3(0.3, 0.59, 0.11))), lit, mix(0.5, 0.78, uLan)) * mix(0.72, 0.9, uLan);
         outgoingLight = lit + outgoingLight * 0.35 + vec3(0.002, 0.005, 0.008);
       }
       #include <opaque_fragment>`);
@@ -182,7 +228,7 @@ const RIM_COL = new THREE.Color(1.0, 0.56, 0.22);
 function buildOaks(group, oaks, ctx, R) {
   const yaw = ctx.yaw;
   const camDir = new THREE.Vector3(Math.sin(yaw), 0.55, Math.cos(yaw)).normalize();
-  const per = Array.from({ length: CLUMP_VARIANTS }, () => ({ mats: [], nrm: [], col: [], hi: [] }));
+  const per = Array.from({ length: CLUMP_VARIANTS }, () => ({ mats: [], nrm: [], col: [], hi: [], rim: [] }));
   const [cw, chh] = imgSize('px_leafclump_0');
   const cardW = cw / PX_PER_M, cardH = chh / PX_PER_M;
   const dummy = new THREE.Object3D();
@@ -249,7 +295,7 @@ function buildOaks(group, oaks, ctx, R) {
       const hue = 0.94 + R() * 0.12;
       const col = [0, 1, 2].map(j => {
         const kc = [KEY_COL.r, KEY_COL.g, KEY_COL.b][j], fc = [FILL_COL.r, FILL_COL.g, FILL_COL.b][j], rc = [RIM_COL.r, RIM_COL.g, RIM_COL.b][j];
-        return ao * (fc + kc * band * 0.95) + rc * rim * 1.1;
+        return ao * (fc + kc * band * 0.95);
       });
       col[0] *= hue;
       const v = Math.floor(R() * CLUMP_VARIANTS);
@@ -257,6 +303,7 @@ function buildOaks(group, oaks, ctx, R) {
       per[v].nrm.push(nx, tmp.y, nz);
       per[v].col.push(...col);
       per[v].hi.push((band >= 1 ? 1 : band >= 0.6 ? 0.35 : 0) * ao + rim * 0.8);
+      per[v].rim.push(rim);
     }
   }
   const geo0 = new THREE.PlaneGeometry(cardW, cardH);
@@ -267,6 +314,7 @@ function buildOaks(group, oaks, ctx, R) {
     const im = new THREE.InstancedMesh(geo, clumpMaterial(v), P.mats.length);
     geo.setAttribute('aNrm', new THREE.InstancedBufferAttribute(new Float32Array(P.nrm), 3));
     geo.setAttribute('aHi', new THREE.InstancedBufferAttribute(new Float32Array(P.hi), 1));
+    geo.setAttribute('aRim', new THREE.InstancedBufferAttribute(new Float32Array(P.rim), 1));
     P.mats.forEach((m, i) => { im.setMatrixAt(i, m); im.setColorAt(i, new THREE.Color(P.col[i * 3], P.col[i * 3 + 1], P.col[i * 3 + 2])); });
     im.castShadow = true; im.receiveShadow = true;
     const map = spriteTex('px_leafclump_' + v);
@@ -325,6 +373,8 @@ function riserTexture() {
 }
 function octPt(cx, cz, r, k) { const a = (k + 0.5) * Math.PI / 4; return [cx + Math.cos(a) * r, cz + Math.sin(a) * r]; }
 
+const daisWarm = { value: new THREE.Color(1.0, 0.55, 0.22).multiplyScalar(1.2), userData: {} };
+daisWarm.userData.base = daisWarm.value.clone();
 function buildDais(group, lantern) {
   const cx = lantern.x, cz = lantern.z;
   const stone = tileTex('tex_stonebrick');
@@ -332,7 +382,7 @@ function buildDais(group, lantern) {
   const riserMat = new THREE.MeshStandardMaterial({ map: riserTexture(), roughness: 0.95, color: 0xffffff });
   riserMat.onBeforeCompile = (sh) => {
     sh.uniforms.uLan = { value: new THREE.Vector3(cx, 0, cz) };
-    sh.uniforms.uWarm = { value: new THREE.Color(1.0, 0.55, 0.22).multiplyScalar(1.2) };
+    sh.uniforms.uWarm = daisWarm;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute float aH; varying float vH; varying vec3 vWP;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvH = aH; vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -422,6 +472,7 @@ export function buildProps(ctx) {
   // --- Great Lantern dais ---
   const lantern = PROPS.find(p => p.type === 'great_lantern');
   buildDais(group, lantern);
+  ctx.daisWarm = daisWarm;
   ctx.lanternSprite = placeSprite(group, 'great_lantern', lantern.x, lantern.z, lantern.h, yaw, { y: 0.4, native: true });
   group.add(blobShadow(lantern.x, 0.4, lantern.z, 1.0, 0.7, 0.5));
 
@@ -429,11 +480,16 @@ export function buildProps(ctx) {
   for (const p of PROPS) {
     if (p.type === 'great_lantern') continue;
     if (p.type === 'oak') { oaks.push(p); continue; }
-    const s = placeSprite(group, p.type, p.x, p.z, p.h, yaw, { flip: p.flip });
+    // foreground framing trees (blurred, near the camera): pulled out toward the frame edge so they
+    // frame rather than smother the shot, and given a living, rim-lit material
+    const fg = (p.type === 'pine' || p.type === 'oak') && p.z > 9;
+    const px0 = fg && Math.abs(p.x) > 10 ? p.x + Math.sign(p.x) * 1.6 : p.x;
+    const s = placeSprite(group, p.type, px0, p.z, p.h, yaw, { flip: p.flip });
+    if (fg) s.material = foregroundTreeMaterial(pxName(p.type, p.h), (px0 < 0 ? 1 : -1) * (p.flip ? -1 : 1));
     const y = s.position.y;
     const [w] = s.userData.size;
     const tree = p.type === 'pine';
-    group.add(blobShadow(p.x, y, p.z, w * (tree ? 0.3 : 0.5), w * (tree ? 0.2 : 0.34), tree ? 0.55 : 0.6));
+    group.add(blobShadow(px0, y, p.z, w * (tree ? 0.3 : 0.5), w * (tree ? 0.2 : 0.34), tree ? 0.55 : 0.6));
     if (p.type === 'lamp') ctx.lamps.push({ x: p.x, y: y + p.h * 0.86, z: p.z + 0.02, sprite: s });
   }
 
