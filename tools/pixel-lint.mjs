@@ -9,7 +9,8 @@
  * pixelated CSS, rAF loop present.
  * Runtime checks (headless Chromium): no page errors, every pixel of the logical canvas is in the
  * declared palette, per-frame colour count, integer display scale at several window sizes,
- * steady-state JS allocation rate inside the loop, and upscaled PNG captures to look at.
+ * steady-state allocation in the loop (real garbage vs V8 float boxing, reported separately),
+ * and upscaled PNG captures to look at.
  *
  * Games opt in to the precise checks by exposing a hook before their first frame:
  *   window.PIXEL = {
@@ -30,7 +31,7 @@ import { deflateSync } from 'node:zlib';
 
 // ---------- args ----------
 const argv = process.argv.slice(2);
-const opt = { seconds: 4, warmup: 4, out: null, scenes: [], file: null, allocWarnKBs: 64, allocFailKBs: 256 };
+const opt = { seconds: 4, warmup: 4, out: null, scenes: [], file: null, allocWarnKBs: 32, allocFailKBs: 128, boxWarnKBs: 512 };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--seconds') opt.seconds = +argv[++i];
@@ -162,7 +163,8 @@ if (pal.size) {
   const top = Object.entries(offTally).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([c, n]) => `#${c}×${n}`).join(' ');
   if (worstOff === 0) PASS('palette-pixels', `every captured pixel is in the ${pal.size}-colour palette`);
   else FAIL('palette-pixels', `${worstOff} off-palette pixels in ${worstOffScene}; ${Object.keys(offTally).length} distinct off-palette colours, top: ${top}`);
-  if (pal.size > 64) WARN('palette-size', `${pal.size} colours declared (scene target ~24-40, whole game <= 64 per frame)`);
+  if (pal.size > 192) WARN('palette-size', `${pal.size} colours declared (a scene ~24-40; a game: shared core <= 48 + <= 32 per stage)`);
+  else PASS('palette-size', `${pal.size} colours declared`);
 }
 if (maxColours > 64) WARN('frame-colours', `up to ${maxColours} distinct colours in one frame (target <= 64; ~24-40 per scene)`);
 else PASS('frame-colours', `max ${maxColours} distinct colours per frame`);
@@ -192,26 +194,31 @@ if (sceneList[0] !== 'default') await page.evaluate(n => window.PIXEL.scenes[n](
 await page.waitForTimeout(opt.warmup * 1000); // let caches fill and the JIT tier up before measuring
 await cdp.send('HeapProfiler.enable');
 await cdp.send('HeapProfiler.collectGarbage');
-await cdp.send('HeapProfiler.startSampling', { samplingInterval: 512, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+const SAMPLE = 512;
+await cdp.send('HeapProfiler.startSampling', { samplingInterval: SAMPLE, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
 const cadence = await page.evaluate(sec => new Promise(res => {
   const ts = []; const t0 = performance.now();
   const f = t => { ts.push(t); if (t - t0 < sec * 1000) requestAnimationFrame(f); else res(ts); };
   requestAnimationFrame(f);
 }), opt.seconds);
 const prof = await cdp.send('HeapProfiler.stopSampling');
-// Sum allocation by function (self size), page script only.
-const byFn = new Map(); let total = 0;
-const walk = n => {
-  const self = n.selfSize || 0, cf = n.callFrame, own = cf.url && cf.url.startsWith('file:');
-  if (self) { total += self; if (own) { const k = `${cf.functionName || '(anonymous)'}:${cf.lineNumber + 1}`; byFn.set(k, (byFn.get(k) || 0) + self); } }
-  (n.children || []).forEach(walk);
-};
+// Each sample is one sampled allocation. With a 512-byte interval a boxed float (HeapNumber, 12 bytes) is
+// reported as 516; strings, arrays, objects and closures come out larger. Splitting on that separates V8's
+// float boxing (tier-dependent noise) from real per-frame garbage, which is what the rule is about.
+const nodeFn = new Map();
+const walk = n => { const cf = n.callFrame; nodeFn.set(n.id, cf.url && cf.url.startsWith('file:') ? `${cf.functionName || '(anonymous)'}:${cf.lineNumber + 1}` : null); (n.children || []).forEach(walk); };
 walk(prof.profile.head);
-const ownTotal = [...byFn.values()].reduce((a, b) => a + b, 0);
-const kbs = ownTotal / 1024 / opt.seconds;
-const topFns = [...byFn.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k} ${(v / 1024 / opt.seconds).toFixed(1)}KB/s`).join('; ');
-const lvl = kbs > opt.allocFailKBs ? FAIL : kbs > opt.allocWarnKBs ? WARN : PASS;
-lvl('alloc-rate', `${kbs.toFixed(1)} KB/s allocated by game code in steady state (warn >${opt.allocWarnKBs}, fail >${opt.allocFailKBs}; a few tens of KB/s is float boxing across calls, hundreds means objects/arrays/closures/strings per frame)${topFns ? '. Top: ' + topFns : ''}`);
+let boxed = 0, other = 0; const otherByFn = new Map(), boxedByFn = new Map();
+for (const smp of prof.profile.samples || []) {
+  const fn = nodeFn.get(smp.nodeId); if (!fn) continue;
+  if (smp.size - SAMPLE <= 4) { boxed += smp.size; boxedByFn.set(fn, (boxedByFn.get(fn) || 0) + smp.size); }
+  else { other += smp.size; otherByFn.set(fn, (otherByFn.get(fn) || 0) + smp.size); }
+}
+const kbs = v => (v / 1024 / opt.seconds);
+const top = m => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k} ${kbs(v).toFixed(1)}`).join('; ');
+const lvl = kbs(other) > opt.allocFailKBs ? FAIL : kbs(other) > opt.allocWarnKBs ? WARN : PASS;
+lvl('alloc-garbage', `${kbs(other).toFixed(1)} KB/s of objects/arrays/closures/strings allocated per second in steady state (warn >${opt.allocWarnKBs}, fail >${opt.allocFailKBs})${other ? '. Top KB/s: ' + top(otherByFn) : ''}`);
+(kbs(boxed) > opt.boxWarnKBs ? WARN : PASS)('alloc-floats', `${kbs(boxed).toFixed(1)} KB/s of boxed floats (V8 HeapNumbers; tier-dependent, cheap to collect; warn >${opt.boxWarnKBs}: round to ints before calls, keep hot floats in typed arrays)${boxed ? '. Top KB/s: ' + top(boxedByFn) : ''}`);
 
 const iv = []; for (let i = 1; i < cadence.length; i++) iv.push(cadence[i] - cadence[i - 1]);
 iv.sort((a, b) => a - b);

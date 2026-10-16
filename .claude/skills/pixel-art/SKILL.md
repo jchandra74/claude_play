@@ -62,6 +62,10 @@ Write a short plan into the conversation before writing the file. It must contai
 - Keep two near-blacks: one for outlines/letterbox, one slightly lifted for foreground silhouettes.
 - Per-stage moods (sunset, night, storm) are separate **sub-palettes** (or LUT remaps of the core),
   designed by hand. Do not multiply colours at runtime.
+- **Shadow and darkness zones** (tunnels, caves, night pools) are a **palette remap**: each colour maps
+  to a precomputed, palette-snapped shadow partner. With an indexed framebuffer that's a LUT. With
+  `fillRect` drawing, redraw the region clipped with a "shade mode" that swaps every colour (see Iron
+  Comet's tunnels). A 50% dither overlay is a last resort: it looks like a screen door and eats details.
 
 ## 3. Light and atmosphere
 
@@ -79,6 +83,8 @@ Write a short plan into the conversation before writing the file. It must contai
 
 - Build sprites **procedurally** from rects, pixel runs and thick Bresenham lines into a small
   sprite buffer, then run the **rim pass** and a **1px outline pass**, then blit (flipped by facing).
+- Rim depth scales with sprite size. On ~24px rigs with 2px limbs, require ≥ 3px depth so the rim lands
+  on torso, head and hat and doesn't eat the limbs. Tint passes skip the rim and outline colours.
 - Size for readability: ~16x28 to ~24x32 for a hero at 320x180. Exaggerate the head, hat, hair,
   weapon or tool: the silhouette must read in solid black.
 - Depth by painter's order: far limbs in the shadow step, then body, head, near limbs in the lit step.
@@ -118,8 +124,15 @@ Write a short plan into the conversation before writing the file. It must contai
   - floats that change every frame should not live in module-level `let`s captured by closures. Keep
     them in a typed array or an object field. Round floats to ints before passing them to
     non-inlined helpers. Both of these avoid V8 boxing every write.
-- `tools/pixel-lint.mjs` measures the steady-state allocation rate. A few tens of KB/s is residual
-  float boxing and fine. Hundreds of KB/s means real per-frame garbage, so find it in the "Top" list.
+- `tools/pixel-lint.mjs` reports two numbers. **alloc-garbage** counts objects, arrays, closures and
+  strings, and must stay near zero (the template: 0.1 KB/s). **alloc-floats** counts V8 boxing
+  doubles (HeapNumbers). The mid tier (Maglev) boxes float stores, and a function called once per
+  frame stays there for minutes. So a big game shows a few hundred KB/s of this. It is cheap young-gen
+  garbage: reduce it where easy (rounding at calls, no float `let`s), but don't contort the code for it.
+- Measured facts behind the rules: a module-level `let` holding a float allocates on **every** write
+  in every tier. Object fields and typed-array slots stop allocating once optimized. `for...of`
+  allocates iterator results until optimized, so use indexed loops in per-frame code. Map keys must be
+  Smis (e.g. `rgb & 0xffffff`, not a 32-bit ABGR colour).
 - Audio: WebAudio nodes per note are expected. Schedule them from the music clock, not from draw code.
 
 ## 8. Camera
