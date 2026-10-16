@@ -631,6 +631,36 @@ function buildHouse(h, ctx) {
     const c = makeSprite(pxName('crate', 0.55), { h: 0.55, yaw: ctx.yaw - h.rot, flip: R() < 0.5, selfLight: 0.05 });
     c.position.set(bxp - sx * 0.62, -0.02, bzp + 0.12); g.add(c);
   }
+  // bell tower: tall stone shaft, glowing belfry, steep four-sided spire with a finial
+  if (h.tower) {
+    const tx = h.tower, TW = 2.5, TH = 9.2;
+    g.add(box(TW + 0.3, PLINTH + 0.6, TW + 0.3, tx, (PLINTH - 0.6) / 2, -0.3, M.stone, 1.6, 1.6, null, 0.45));
+    g.add(box(TW, TH, TW, tx, PLINTH + TH / 2, -0.3, M.stone, 1.6, 1.6, null, 0.4));
+    // string courses
+    for (const yy of [3.4, 6.6]) g.add(box(TW + 0.18, 0.18, TW + 0.18, tx, PLINTH + yy, -0.3, M.stone, 1.2));
+    g.add(box(TW + 0.34, 0.3, TW + 0.34, tx, PLINTH + TH, -0.3, M.stone, 1.2));
+    for (const fz of [1, -1]) {
+      const bw = makeDecal('window_lattice', 1.2, { emissive: true, emissiveIntensity: 4.2, emissiveOpts: { threshold: 0.5 }, castShadow: false });
+      if (fz < 0) bw.rotation.y = Math.PI;
+      bw.position.set(tx, PLINTH + 7.35, -0.3 + fz * (TW / 2 + 0.05));
+      g.add(bw);
+      addHalo(bw, PLINTH + 8.0, 1.1, 1.8);
+    }
+    const lw = makeDecal('window_shutter', 1.0, winOpts('window_shutter'));
+    lw.position.set(tx, PLINTH + 4.2, -0.3 + TW / 2 + 0.05);
+    g.add(lw);
+    addHalo(lw, PLINTH + 4.7, 0.7, 1.2);
+    const spH = 5.2;
+    const sp = new THREE.ConeGeometry((TW + 0.7) * 0.7071, spH, 4, 1);
+    sp.rotateY(Math.PI / 4);
+    worldUV(sp, 1.2, 1.2, [0, 0, 0]);
+    const spire = mesh(sp, roofMat(h.roof));
+    spire.position.set(tx, PLINTH + TH + 0.15 + spH / 2, -0.3);
+    g.add(spire);
+    g.add(box(0.12, 1.1, 0.12, tx, PLINTH + TH + spH + 0.5, -0.3, M.darkBeam, 0.5));
+    g.add(box(0.6, 0.12, 0.12, tx, PLINTH + TH + spH + 0.75, -0.3, M.darkBeam, 0.5));
+  }
+
   // contact AO under the house
   const ao = new THREE.Mesh(new THREE.PlaneGeometry(W + 2.6, D + 2.6), new THREE.MeshBasicMaterial({
     map: radialTex(), color: 0x000000, transparent: true, opacity: 0.6, depthWrite: false,

@@ -58,11 +58,13 @@ void main(){
   col += haze * uHazeDensity;
   // low ground mist: thicker in the low tiers, catches the cool moonlight
   float mistH = clamp(1.0 - (wp.y + 1.5) / 4.0, 0.0, 1.0);
-  float far = 1.0 - exp(-L * 0.02);
-  col += uMistColor * uMist * (mistH * mistH + 0.35) * far;
-  // moonlit air: distant things recede into luminous blue rather than mud
-  float air = smoothstep(32.0, 70.0, L) * (d >= 0.99999 ? 0.0 : 1.0);
-  col = mix(col, col * vec3(0.55, 0.75, 1.05) + uMistColor * 1.4, air * 0.55);
+  // mist builds up beyond the focal plane (the camera may sit far from the subject on a low tilt)
+  float far = 1.0 - exp(-max(L - uFocus * 0.6, 0.0) * 0.02);
+  float skyW = d >= 0.99999 ? exp(-max(rd.y, 0.0) * 14.0) : 1.0;   // only a thin luminous band on the horizon
+  col += uMistColor * uMist * (mistH * mistH + 0.35) * far * skyW;
+  // moonlit air: distant layers recede into luminous blue rather than mud, one step per depth band
+  float air = smoothstep(uFocus + 8.0, uFocus + 70.0, L) * (d >= 0.99999 ? 0.0 : 1.0);
+  col = mix(col, col * vec3(0.6, 0.78, 1.05) + uMistColor * 1.2, air * 0.5);
   gl_FragColor = vec4(col, cocOf(depth));
 }`;
 

@@ -541,7 +541,7 @@ export function buildPlaza(ctx) {
   // post-and-rail fence sitting on the wall coping, flower troughs, pots, crates, hay and firewood behind it,
   // and iron wall lanterns on the retaining wall below so the blurred foreground still has lit shapes.
   fence3D(ctx, [[-16, 4.74], [-10.6, 4.74]], 0.9);
-  fence3D(ctx, [[-8.6, 4.74], [1.2, 4.74]], 0.9);
+  fence3D(ctx, [[-8.6, 4.74], [-3.6, 4.74]], 0.9);   // open in front of the party: the hero shot looks straight at them
   fence3D(ctx, [[3.8, 4.74], [5.76, 4.74], [5.76, 2.74], [12.5, 2.74]], 0.9);
   const PINK = 0xffb8d0, GOLD = 0xfff0a8, LILAC = 0xd8c8ff, WHITE = 0xffffff, RED = 0xffa8a0;
   {
@@ -551,12 +551,10 @@ export function buildPlaza(ctx) {
     pot(ctx, -11.1, 4.4, 1.1, 'bush', null, true);
     flowerBox(ctx, -7.9, 4.38, 1.3, 0.03, [PINK, WHITE, GOLD]);
     pot(ctx, -5.75, 4.42, 1.0, 'flowers', LILAC);
-    basket(ctx, -2.7, 4.3, 'apple', R);
-    flowerBox(ctx, -0.6, 4.42, 1.6, -0.02, [GOLD, RED, WHITE, PINK]);
-    pot(ctx, 1.05, 4.45, 1.0, 'flowers', PINK, true);
+    basket(ctx, -4.6, 4.3, 'apple', R);
+    pot(ctx, -3.2, 4.5, 1.0, 'flowers', PINK, true);
     pot(ctx, 4.0, 4.45, 1.1, 'bush');
-    pot(ctx, -3.9, 4.55, 1.0, 'flowers', GOLD, true);
-    pot(ctx, 0.2, 3.95, 0.8, 'flowers', LILAC);
+    pot(ctx, -6.7, 4.55, 1.0, 'flowers', GOLD, true);
     flowerBox(ctx, -12.3, 4.5, 1.1, 0.0, [GOLD, PINK]);
     logPile(ctx, 5.05, 4.0, 0.0, 3, 0.85);
     basket(ctx, 7.0, 2.25, 'cabbage', R);
