@@ -18,6 +18,21 @@ export const WINDOW_COLOR = new THREE.Color(1.0, 0.55, 0.22);
 
 export const MOON_DIR = new THREE.Vector3(-0.35, 0.55, -0.75).normalize(); // shared with sky.js
 const MOON_COLOR = new THREE.Color(0.42, 0.66, 1.0);
+
+// ---------- Great Lantern level (0 = out, 1 = fully lit) ----------
+// One shared uniform object: props.js (dais bounce, oak rim), particles.js (embers), post.js (grade)
+// and the materials below all read it, so setLanternLevel() is a handful of scalar writes per frame.
+export const lanternLevelU = { value: 1 };
+const LV = { k: 1, t: 0 };
+const URL_LANTERN = (() => {
+  try {
+    const v = new URLSearchParams(location.search).get('lantern');
+    if (v === null || v === '') return null;
+    const f = parseFloat(v);
+    return Number.isFinite(f) ? Math.min(1, Math.max(0, f)) : null;
+  } catch (e) { return null; }
+})();
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const POOL_MAX = quality.name === 'high' ? 32 : quality.name === 'med' ? 22 : 14;
 
 // ---------- analytic pool lights (patched into the standard lighting chunk) ----------
@@ -155,7 +170,7 @@ function hookMaterial(m) {
 }
 
 // ---------- glow-from-the-glass shading for the light-source sprites ----------
-function glassShade(mesh, center, radius, key) {
+function glassShade(mesh, center, radius, key, levelU) {
   const m = mesh.material;
   if (!m || m.userData.glassHooked) return;
   m.userData.glassHooked = true;
@@ -164,6 +179,7 @@ function glassShade(mesh, center, radius, key) {
   m.onBeforeCompile = function (sh, r) {
     prev.call(this, sh, r);
     sh.uniforms.uGlass = { value: new THREE.Vector4(center[0], center[1], w / h, radius) };
+    sh.uniforms.uLevel = levelU;
     const glass = `{
         vec2 gq = vec2((vMapUv.x - uGlass.x) * uGlass.z, vMapUv.y - uGlass.y);
         float gd = length(gq) / uGlass.w;
@@ -174,20 +190,61 @@ function glassShade(mesh, center, radius, key) {
         float bl = dot(base, vec3(0.2126, 0.7152, 0.0722));
         vec3 coolMetal = bl * vec3(0.16, 0.3, 0.62) + base * 0.08;
         vec3 warmMetal = base * vec3(1.05, 0.72, 0.42);
-        outgoingLight = mix(coolMetal, warmMetal, g);
+        outgoingLight = mix(coolMetal, warmMetal, g * uLevel);
         // warm bounce from the lit dais on the plinth
-        outgoingLight = mix(outgoingLight, base * vec3(0.95, 0.6, 0.32), 0.75 * (1.0 - smoothstep(0.03, 0.2, vMapUv.y)));
+        outgoingLight = mix(outgoingLight, base * vec3(0.95, 0.6, 0.32), 0.75 * uLevel * (1.0 - smoothstep(0.03, 0.2, vMapUv.y)));
         // glowing panes: a hot core falling off to deep amber at the frame, never a flat white slab
         vec3 em = texture2D(tEmi, vMapUv).rgb;
         float core = exp(-gd * gd * 2.2);
-        outgoingLight += em * uEmi * mix(vec3(0.16, 0.085, 0.03), vec3(0.36, 0.24, 0.12), core);
+        // unlit: the panes go to dark, moon-glazed glass with a pale sheen at the top
+        float pane = smoothstep(0.02, 0.2, dot(em, vec3(0.33)));
+        vec3 darkGlass = vec3(0.012, 0.022, 0.045) + vec3(0.03, 0.06, 0.12) * smoothstep(0.4, 1.0, vMapUv.y - uGlass.y + 0.5) * (0.6 + 0.4 * core);
+        outgoingLight = mix(outgoingLight, darkGlass, pane * (1.0 - uLevel));
+        outgoingLight += em * uEmi * uLevel * uLevel * mix(vec3(0.16, 0.085, 0.03), vec3(0.36, 0.24, 0.12), core);
       }`;
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec4 uGlass;')
+      .replace('#include <common>', '#include <common>\nuniform vec4 uGlass; uniform float uLevel;')
       .replace('outgoingLight += texture2D(tEmi, vMapUv).rgb * uEmi;', glass);
   };
   m.customProgramCacheKey = () => 'unlit-emi-' + key;
   m.needsUpdate = true;
+}
+
+// ---------- wall sconces: the glass sits inside the iron cage, so the cage itself becomes the lit
+// fixture: six glazed panes between dark iron mullions, glowing from a hot core (scaled by the
+// sconce's own level so they can dim / flicker with the Great Lantern) ----------
+const CAGE_VS = `varying vec2 vUv; varying vec3 vN, vV;
+void main(){ vUv = uv; vec4 mv = modelViewMatrix * vec4(position, 1.0); vV = -mv.xyz; vN = normalMatrix * normal; gl_Position = projectionMatrix * mv; }`;
+const CAGE_FS = `uniform float uLevel; uniform vec3 uHot, uAmber; varying vec2 vUv; varying vec3 vN, vV;
+void main(){
+  float f = fract(vUv.x * 6.0);
+  float mull = step(f, 0.12) + step(0.88, f);
+  float rail = step(vUv.y, 0.12) + step(0.86, vUv.y);
+  float frame = clamp(mull + rail, 0.0, 1.0);
+  float cx = 1.0 - abs(f - 0.5) * 2.0, cy = 1.0 - abs(vUv.y - 0.5) * 2.0;
+  float core = pow(max(cx * cy, 0.0), 0.7);
+  float facing = clamp(dot(normalize(vN), normalize(vV)), 0.0, 1.0);
+  vec3 glow = mix(uAmber, uHot, core * (0.4 + 0.6 * facing)) * uLevel;
+  vec3 dark = vec3(0.012, 0.02, 0.04) + vec3(0.02, 0.04, 0.08) * vUv.y;
+  vec3 pane = mix(dark, glow, smoothstep(0.0, 0.25, uLevel));
+  vec3 iron = vec3(0.025, 0.02, 0.022) + uAmber * 0.08 * uLevel * (1.0 - rail * 0.5);
+  gl_FragColor = vec4(mix(pane, iron, frame), 1.0);
+}`;
+function sconceFixture(lamp) {
+  const glass = lamp.sprite, g = glass && glass.parent;
+  if (!g || glass.userData.size) return null;
+  const levelU = { value: 1 };
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: CAGE_VS, fragmentShader: CAGE_FS,
+    uniforms: { uLevel: levelU, uHot: { value: new THREE.Color(5.0, 3.1, 1.4) }, uAmber: { value: new THREE.Color(1.5, 0.62, 0.16) } },
+  });
+  for (const c of g.children) {
+    const p = c.geometry && c.geometry.parameters;
+    if (c.isMesh && c !== glass && p && p.radiusTop === 0.11 && c.geometry.type === 'CylinderGeometry') {
+      c.material = [mat, c.material, c.material];
+    }
+  }
+  return levelU;
 }
 
 // ---------- characters: the crispest, brightest thing in their area ----------
@@ -269,6 +326,8 @@ export function buildLighting(ctx) {
   // ambient: deep blue-teal sky, near-black ground bounce
   const hemi = new THREE.HemisphereLight(new THREE.Color(0.14, 0.3, 0.6), new THREE.Color(0.03, 0.05, 0.09), 1.55);
   scene.add(hemi);
+  ctx.hemi = hemi;
+  const FX = ctx.lanternFx = { lamps: [], lanternPools: [], lanternHalos: [], bulbs: null, chars: [] };
 
   // ---- Great Lantern: the key light of the scene ----
   const L = GREAT_LANTERN_LIGHT;
@@ -282,22 +341,31 @@ export function buildLighting(ctx) {
   lan.shadow.camera.near = 0.2;
   lan.shadow.camera.far = 40;
   scene.add(lan);
-  ctx.flicker.push({ light: lan, base: LI, seed: 0.3 });
-  ctx.hazeLights.push({ pos: lan.position.clone(), color: LANTERN_COLOR.clone(), strength: 0.9 });
-  halo(ctx, lan.position, LANTERN_COLOR, 5.5, 0.45);
-  halo(ctx, lan.position, new THREE.Color(1, 0.7, 0.4), 2.2, 0.22);
+  const lanFl = { light: lan, base: LI, seed: 0.3, mul: 1 };
+  ctx.flicker.push(lanFl);
+  FX.lanternFlicker = lanFl;
+  FX.lanternHaze = { pos: lan.position.clone(), color: LANTERN_COLOR.clone(), strength: 0.9, base: 0.9 };
+  ctx.hazeLights.push(FX.lanternHaze);
+  FX.lanternHalos.push(halo(ctx, lan.position, LANTERN_COLOR, 5.5, 0.45, true));
+  FX.lanternHalos.push(halo(ctx, lan.position, new THREE.Color(1, 0.7, 0.4), 2.2, 0.22, true));
   // a broad, soft warm fill so the houses facing the plaza catch a little of the lantern too
-  addPool(ctx, new THREE.Vector3(L.x, L.y + 0.5, L.z), LANTERN_COLOR, 0.16, 13, 0.02, 0);
+  FX.lanternPools.push(addPool(ctx, new THREE.Vector3(L.x, L.y + 0.5, L.z), LANTERN_COLOR, 0.16, 13, 0.02, 0));
   // hot core right round the dais
-  addPool(ctx, new THREE.Vector3(L.x, 2.4, L.z + 1.6), LANTERN_COLOR, 9, 5.5, 1.0, 0);
+  FX.lanternPools.push(addPool(ctx, new THREE.Vector3(L.x, 2.4, L.z + 1.6), LANTERN_COLOR, 9, 5.5, 1.0, 0));
 
   // ---- street lamps ----
+  // each lamp relights at its own threshold, nearest the Great Lantern first (the flame spreading out)
+  let maxD = 1;
+  for (const l of ctx.lamps || []) maxD = Math.max(maxD, Math.hypot(l.x - L.x, l.z - L.z));
   for (const l of ctx.lamps || []) {
     const p = new THREE.Vector3(l.x, l.y, l.z);
-    addPool(ctx, p, LAMP_COLOR, 24, 5.2, 1.0, 1, l.x * 0.37 + l.z);
-    ctx.hazeLights.push({ pos: p, color: LAMP_COLOR.clone(), strength: 0.45 });
-    halo(ctx, p, LAMP_COLOR, 1.4, 1.2);
-    halo(ctx, p, new THREE.Color(1, 0.85, 0.6), 0.45, 1.6);
+    const seed = l.x * 0.37 + l.z;
+    const pool = addPool(ctx, p, LAMP_COLOR, 24, 5.2, 1.0, 1, seed);
+    const haze = { pos: p, color: LAMP_COLOR.clone(), strength: 0.45, base: 0.45 };
+    ctx.hazeLights.push(haze);
+    const halos = [halo(ctx, p, LAMP_COLOR, 1.4, 1.2, true), halo(ctx, p, new THREE.Color(1, 0.85, 0.6), 0.45, 1.6, true)];
+    const d = Math.hypot(l.x - L.x, l.z - L.z) / maxD;
+    FX.lamps.push({ lamp: l, pool, haze, halos, seed, thr: 0.3 + 0.5 * d, level: 1, cage: sconceFixture(l) });
   }
 
   // ---- doorways of lit houses: warm spill onto the step / path ----
@@ -351,18 +419,106 @@ export function buildLighting(ctx) {
   });
 
   // light-source sprites glow from the glass outward
-  if (ctx.lanternSprite) glassShade(ctx.lanternSprite, [0.5, 0.72], 0.17, 'lantern');
-  if (ctx.lamps && ctx.lamps[0]) glassShade(ctx.lamps[0].sprite, [0.5, 0.86], 0.13, 'lamp');
+  FX.lanternGlass = { value: 1 };
+  FX.lampGlass = { value: 1 };
+  if (ctx.lanternSprite) glassShade(ctx.lanternSprite, [0.5, 0.72], 0.17, 'lantern', FX.lanternGlass);
+  const lampSprite = (ctx.lamps || []).find(l => l.sprite && l.sprite.userData.size);
+  if (lampSprite) glassShade(lampSprite.sprite, [0.5, 0.86], 0.13, 'lamp', FX.lampGlass);
+
+  // festoon bulbs strung from the lantern crown (plaza.js): dim with it
+  scene.traverse(o => {
+    if (FX.bulbs || !o.isInstancedMesh || !o.material || !o.material.isMeshBasicMaterial) return;
+    const p = o.geometry && o.geometry.parameters;
+    if (o.geometry.type === 'SphereGeometry' && p && Math.abs(p.radius - 0.055) < 1e-4) FX.bulbs = { mat: o.material, base: o.material.color.clone() };
+  });
 
   // characters: warm on the side facing a light, cool on the other
   for (const c of ctx.characters || []) {
     if (!c.sprite || !c.sprite.geometry) continue;
     bendSpriteNormals(c.sprite);
+    // capture the character shader's warm rim / fill uniforms so the lantern level can cool them
+    const cm = c.sprite.material;
+    if (cm && !cm.userData.levelHooked) {
+      cm.userData.levelHooked = true;
+      const ent = { sh: null };
+      const prevC = cm.onBeforeCompile;
+      cm.onBeforeCompile = function (sh, r) {
+        prevC.call(this, sh, r);
+        ent.sh = sh.uniforms;
+        if (sh.uniforms.uRimCol && !ent.rim) { ent.rim = sh.uniforms.uRimCol.value.clone(); ent.fill = sh.uniforms.uFill ? sh.uniforms.uFill.value.clone() : null; }
+        applyChar(ent, LV.k);
+      };
+      FX.chars.push(ent);
+    }
     // characters.js now does its own warm fill, rim and saturation; hooking both declares uTexel twice
     // heroShade(c.sprite) is not applied here: characters.js does its own warm fill, rim and saturation.
   }
 
+  FX.moonBase = moon.intensity; FX.hemiBase = hemi.intensity;
   updateLighting(ctx, 0);
+  setLanternLevel(ctx, URL_LANTERN ?? 1);
+}
+
+const COOL_RIM = new THREE.Color(0.1, 0.17, 0.32), COOL_FILL = new THREE.Color(0.05, 0.08, 0.13);
+function applyChar(ent, k) {
+  if (!ent.sh || !ent.rim) return;
+  const kl = sstep(0.0, 0.45, k);
+  ent.sh.uRimCol.value.copy(ent.rim).multiplyScalar(0.12 + 0.88 * kl).lerp(COOL_RIM, (1 - kl) * 0.6);
+  if (ent.fill && ent.sh.uFill) ent.sh.uFill.value.copy(ent.fill).multiplyScalar(0.55 + 0.45 * kl).add(COOL_FILL.clone().multiplyScalar(1 - kl));
+}
+
+// Low, guttering flame for an unlit / relighting lamp: a dim ember glow that breathes and drops out.
+function gutter(t, seed) {
+  const n = 0.55 + 0.25 * Math.sin(t * 9.3 + seed * 7) + 0.2 * Math.sin(t * 23.1 + seed * 3);
+  const q = Math.sin(Math.floor(t * 5 + seed * 11) * 12.9898 + seed) * 43758.5453;
+  const drop = (q - Math.floor(q)) > 0.86 ? 0.35 : 1;
+  return Math.max(0, n) * drop;
+}
+
+/**
+ * Great Lantern level, 0..1. 0 = the Great Lantern is out (dark glass, no point light / pool / embers,
+ * street lamps guttering low, windows still lit, the town cold and moonlit). 1 = fully relit.
+ * In between the lantern catches first (k 0..0.45) and the lamps follow at staggered thresholds by
+ * distance from it (k 0.3..0.95). Cheap: scalar writes only, safe to call every frame.
+ */
+export function setLanternLevel(ctx, k) {
+  LV.k = Math.min(1, Math.max(0, +k || 0));
+  applyLevel(ctx, LV.t);
+}
+export function getLanternLevel() { return LV.k; }
+
+function applyLevel(ctx, t) {
+  const FX = ctx.lanternFx;
+  if (!FX) return;
+  const k = LV.k;
+  const kl = sstep(0.0, 0.45, k);                         // the Great Lantern itself
+  lanternLevelU.value = kl;
+  FX.lanternFlicker.mul = kl * kl;
+  for (const pl of FX.lanternPools) pl.mul = kl;
+  FX.lanternHaze.strength = FX.lanternHaze.base * kl;
+  for (const h of FX.lanternHalos) { h.material.color.copy(h.material.userData.base).multiplyScalar(kl); h.visible = kl > 0.002; }
+  FX.lanternGlass.value = kl;
+  let lampSum = 0, lampN = 0;
+  for (const L of FX.lamps) {
+    const on = sstep(L.thr, L.thr + 0.14, k);
+    const g = 0.14 * gutter(t, L.seed);
+    // ignition: a brief over-bright catch as the lamp lights
+    const catchK = 1 + 0.35 * Math.max(0, 1 - Math.abs((k - L.thr - 0.07) / 0.07)) * (on > 0 && on < 1 ? 1 : 0);
+    const lv = Math.min(1.35, (g + (1 - g) * on) * catchK);
+    L.level = lv;
+    L.pool.mul = lv;
+    L.haze.strength = L.haze.base * lv;
+    for (const h of L.halos) h.material.color.copy(h.material.userData.base).multiplyScalar(lv);
+    if (L.cage) L.cage.value = lv;
+    if (L.lamp.sprite && L.lamp.sprite.userData.size) { lampSum += lv; lampN++; }
+  }
+  FX.lampGlass.value = lampN ? lampSum / lampN : kl;
+  if (FX.bulbs) FX.bulbs.mat.color.copy(FX.bulbs.base).multiplyScalar(0.03 + 0.97 * sstep(0.2, 0.7, k));
+  // the town without its lantern: the moon takes over, a touch brighter and colder
+  if (ctx.moon) ctx.moon.intensity = FX.moonBase * (1 + 0.45 * (1 - kl));
+  if (ctx.hemi) ctx.hemi.intensity = FX.hemiBase * (1 + 0.25 * (1 - kl));
+  for (const c of FX.chars) applyChar(c, k);
+  if (ctx.daisWarm) ctx.daisWarm.value.copy(ctx.daisWarm.userData.base).multiplyScalar(kl);
 }
 
 function addPool(ctx, pos, color, intensity, radius, core, prio, seed = null) {
@@ -374,10 +530,13 @@ function addPool(ctx, pos, color, intensity, radius, core, prio, seed = null) {
 }
 
 let haloMats = new Map();
-export function halo(ctx, pos, color, size, intensity) {
+export function halo(ctx, pos, color, size, intensity, own = false) {
   const key = color.getHexString() + intensity.toFixed(2);
-  let m = haloMats.get(key);
-  if (!m) {
+  let m = own ? null : haloMats.get(key);
+  if (own) {
+    m = new THREE.SpriteMaterial({ map: radialTex(), color: color.clone().multiplyScalar(intensity), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false });
+    m.userData.base = m.color.clone();
+  } else if (!m) {
     m = new THREE.SpriteMaterial({ map: radialTex(), color: color.clone().multiplyScalar(intensity), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false });
     haloMats.set(key, m);
   }
@@ -391,9 +550,11 @@ export function halo(ctx, pos, color, size, intensity) {
 
 const _v = new THREE.Vector3(), _m = new THREE.Matrix4(), _frustum = new THREE.Frustum(), _sphere = new THREE.Sphere();
 export function updateLighting(ctx, t) {
+  LV.t = t;
+  applyLevel(ctx, t);
   for (const f of ctx.flicker) {
     const n = Math.sin(t * 7.1 + f.seed * 13) * 0.5 + Math.sin(t * 13.7 + f.seed * 5) * 0.3 + Math.sin(t * 2.3 + f.seed) * 0.2;
-    f.light.intensity = f.base * (1 + 0.05 * n);
+    f.light.intensity = f.base * (1 + 0.05 * n) * (f.mul ?? 1);
   }
   const cam = ctx.camera;
   if (!cam || !ctx.pools) return;
@@ -407,7 +568,8 @@ export function updateLighting(ctx, t) {
     if (!_frustum.intersectsSphere(_sphere)) continue;
     _v.copy(pl.pos).applyMatrix4(cam.matrixWorldInverse);
     P[n].set(_v.x, _v.y, _v.z, pl.radius * pl.radius);
-    let k = pl.intensity;
+    let k = pl.intensity * (pl.mul ?? 1);
+    if (k <= 1e-4) continue;
     if (pl.seed !== null) k *= 1 + 0.06 * (Math.sin(t * 7.1 + pl.seed * 13) * 0.6 + Math.sin(t * 12.3 + pl.seed * 3) * 0.4);
     C[n].set(pl.color.r * k, pl.color.g * k, pl.color.b * k, pl.core);
     n++;

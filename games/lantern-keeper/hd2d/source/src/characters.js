@@ -23,7 +23,7 @@ function silhouetteShadow(name, w, h, flip) {
 // scene lights: a warm front fill from the nearest light, a little extra saturation, and a one-pixel
 // rim on the silhouette edges that face that light (found by testing the neighbouring texel's alpha
 // in the light's on-screen direction), plus a faint cool moon rim along the top edges.
-const SCALE = 1.12;                         // characters read a touch larger than the props around them
+const SCALE = 1.6;                         // characters read a touch larger than the props around them
 function characterMaterial(name, light, flip, yaw, pos) {
   const [tw, th] = imgSize(name);
   const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));

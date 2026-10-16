@@ -9,6 +9,16 @@ import { worldUV, mergeGeos, heightAO } from './geom.js';
 import { groundY } from './terrain.js';
 import { GREAT_LANTERN_LIGHT, rng, TIER } from './layout.js';
 
+// Walk-blocking footprints of everything built here, read by the game's collision (game_world.js).
+// box: centre + half extents in the object's local frame (yaw rot); c: circle; s: capsule segment.
+export const COLLIDERS = [];
+const colBox = (x, z, hw, hd, rot = 0, lx = 0, lz = 0) => {
+  const c = Math.cos(rot), s = Math.sin(rot);
+  COLLIDERS.push({ t: 'box', x: x + lx * c + lz * s, z: z - lx * s + lz * c, hw, hd, rot });
+};
+const colCircle = (x, z, r) => COLLIDERS.push({ t: 'c', x, z, r });
+const colSeg = (x0, z0, x1, z1, r) => COLLIDERS.push({ t: 's', x0, z0, x1, z1, r });
+
 function stripeTex(c1, c2, scallop = true) {
   const c = document.createElement('canvas'); c.width = 32; c.height = 16;
   const g = c.getContext('2d');
@@ -88,6 +98,7 @@ function produce(g, x, y, z, kind, R, n = 7) {
 }
 
 function sack(g, x, y, z, R) {
+  if (g.userData.free) colCircle(x, z, 0.26);
   const s = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), mats().sack);
   s.scale.set(1, 1.25 + R() * 0.2, 0.85); s.position.set(x, y + 0.27, z); s.rotation.y = R() * 3;
   s.castShadow = s.receiveShadow = true; g.add(s);
@@ -134,6 +145,7 @@ function stall(ctx, x, z, rot, colors, kind, goods) {
     g.add(val);
   }
   place(ctx, g, x, z, rot);
+  colBox(x, z, W / 2 + 0.75, D / 2 + 0.25, rot);
   // goods: produce piles on the counter + crates/barrels
   produce(g, -0.75, 0.91, 0.1, goods[0], R, 8);
   produce(g, 0.15, 0.91, 0.12, goods[1], R, 6);
@@ -173,6 +185,7 @@ function cart(ctx, x, z, rot, load) {
   else if (load === 'sacks') { sack(g, -0.4, 0.67, -0.15, R); sack(g, 0.1, 0.67, 0.15, R); sack(g, -0.1, 0.9, -0.05, R); }
   else produce(g, 0, 0.67, 0, 'cabbage', R, 10);
   place(ctx, g, x, z, rot, -0.01);
+  colBox(x, z, 1.55, 0.62, rot, 0.6, 0);
   // contact shadows: under the bed, at each wheel and at the shaft tips
   const y = groundY(x, z);
   const toW = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyAxisAngle(new THREE.Vector3(0, 1, 0), rot).add(new THREE.Vector3(x, 0, z));
@@ -194,6 +207,7 @@ function bench(ctx, x, z, rot) {
     g.add(bx(0.06, 0.5, 0.06, sx, 0.7, -0.2, MM.dark, 1));
   }
   place(ctx, g, x, z, rot);
+  colBox(x, z, 0.9, 0.3, rot);
 }
 
 // ---------------- small pixel textures for the clutter ----------------
@@ -260,6 +274,7 @@ function pot(ctx, x, z, size = 1, plant = 'flowers', tint = null, flip = false) 
   const C = clutterMats();
   const y = groundY(x, z);
   const h = 0.34 * size, rt = 0.2 * size, rb = 0.14 * size;
+  colCircle(x, z, rt + 0.08);
   const pg = new THREE.CylinderGeometry(rt, rb, h, 10, 1, true);
   const pm = m(pg, C.pot); pm.position.set(x, y + h / 2, z); ctx.scene.add(pm);
   const rim = m(new THREE.TorusGeometry(rt, 0.03 * size, 4, 12).rotateX(Math.PI / 2), C.pot); rim.position.set(x, y + h, z); ctx.scene.add(rim);
@@ -277,6 +292,7 @@ function flowerBox(ctx, x, z, len, rot, tints) {
   g.add(bx(len, 0.34, 0.42, 0, 0.17, 0, MM.wood, 0.5));
   g.add(bx(len + 0.08, 0.06, 0.48, 0, 0.36, 0, MM.dark, 1));
   place(ctx, g, x, z, rot);
+  colBox(x, z, len / 2 + 0.05, 0.26, rot);
   const y = groundY(x, z);
   const n = Math.max(2, Math.round(len / 0.42));
   const R = rng(Math.floor(Math.abs(x * 97 + z * 13)));
@@ -298,6 +314,7 @@ function basket(ctx, x, z, load, R) {
   const inner = new THREE.Mesh(new THREE.CircleGeometry(0.25, 10).rotateX(-Math.PI / 2), C.soil); inner.position.y = 0.16; g.add(inner);
   produce(g, 0, 0.12, 0, load, R, load === 'pumpkin' ? 3 : 7);
   place(ctx, g, x, z, R() * 3);
+  colCircle(x, z, 0.3);
   ctx.scene.add(blobShadow(x, groundY(x, z), z + 0.02, 0.36, 0.26, 0.75));
 }
 
@@ -314,6 +331,7 @@ function logPile(ctx, x, z, rot, rows = 3, len = 0.9) {
     g.add(o);
   }
   place(ctx, g, x, z, rot);
+  colBox(x, z, rows * r * 1.2, len / 2, rot);
   ctx.scene.add(blobShadow(x, groundY(x, z), z + 0.03, rows * r * 1.6, len * 0.55, 0.7));
 }
 
@@ -323,11 +341,13 @@ function hayBale(ctx, x, z, rot) {
   const geo = new THREE.BoxGeometry(0.9, 0.46, 0.55); geo.translate(0, 0.23, 0); worldUV(geo, 0.6);
   g.add(m(geo, C.straw));
   place(ctx, g, x, z, rot);
+  colBox(x, z, 0.5, 0.32, rot);
   ctx.scene.add(blobShadow(x, groundY(x, z), z + 0.03, 0.6, 0.42, 0.7));
 }
 
 function crateStack(ctx, x, z, n, R) {
   const y = groundY(x, z);
+  colCircle(x, z, 0.42);
   let top = y;
   for (let i = 0; i < n; i++) {
     const h = i === 0 ? 0.62 + R() * 0.12 : 0.48 + R() * 0.1;
@@ -364,6 +384,7 @@ function fence3D(ctx, pts, h = 1.0) {
     const [x0, z0] = pts[i], [x1, z1] = pts[i + 1];
     const len = Math.hypot(x1 - x0, z1 - z0), n = Math.max(1, Math.round(len / 1.6));
     const ang = Math.atan2(z1 - z0, x1 - x0);
+    colSeg(x0, z0, x1, z1, 0.18);
     for (let k = 0; k <= n; k++) {
       const t = k / n, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t, y = groundY(x, z);
       const ph = h + (R() - 0.5) * 0.14;
@@ -399,6 +420,7 @@ function parapet(ctx, pts, h = 0.55) {
 }
 
 function banner(ctx, x, z, colA, colB, h = 3.6) {
+  colCircle(x, z, 0.2);
   const MM = mats();
   const g = new THREE.Group();
   g.add(bx(0.1, h, 0.1, 0, h / 2, 0, MM.dark, 0.6));
@@ -486,12 +508,12 @@ export function buildPlaza(ctx) {
   const st1 = stall(ctx, -4.5, -6.7, 0.14, ['#b8433a', '#e8dcc0'], 'flat', ['apple', 'cabbage', 'pumpkin']);
   const st2 = stall(ctx, 3.3, -7.4, -0.08, ['#3d6a9a', '#e8dcc0'], 'gable', ['pumpkin', 'apple']);
   cart(ctx, 6.3, 0.9, -0.55, 'pumpkin');
-  cart(ctx, 10.6, -1.6, 2.6, 'sacks');
+  cart(ctx, 9.5, -0.9, 2.6, 'sacks');   // clear of the east stairs' foot (the road to the gate)
   cart(ctx, -8.6, -4.0, 1.9, 'cabbage');
   bench(ctx, -6.4, -2.9, Math.PI / 2 - 0.08);
   bench(ctx, 4.9, -1.3, -Math.PI / 2 + 0.2);
   {
-    const R = rng(55); const g = new THREE.Group(); ctx.scene.add(g);
+    const R = rng(55); const g = new THREE.Group(); g.userData.free = true; ctx.scene.add(g);
     for (const [x, z] of [[-1.0, -7.6], [11.0, -5.1], [-7.2, -6.6], [-4.5, -1.5]]) sack(g, x, groundY(x, z), z, R);
   }
 
@@ -500,6 +522,7 @@ export function buildPlaza(ctx) {
     const geos = [];
     const boxes = [[-3.6, -3.9, 1.6, 0.7, 0.3], [3.9, -4.2, 1.3, 0.7, -0.2], [-4.4, 4.0, 1.4, 0.6, 0.1]];
     for (const [x, z, w, d, r] of boxes) {
+      colBox(x, z, w / 2 + 0.05, d / 2 + 0.05, r);
       const g = new THREE.BoxGeometry(w, 0.42, d, 1, 2, 1); g.rotateY(r); g.translate(x, 0.21, z);
       worldUV(g, 1.2); heightAO(g, 0, 0.42, 0.5); geos.push(g);
       const c = new THREE.BoxGeometry(w + 0.1, 0.08, d + 0.1); c.rotateY(r); c.translate(x, 0.44, z);
@@ -532,7 +555,7 @@ export function buildPlaza(ctx) {
   {
     const MMd = MM.dark; const g = new THREE.Group();
     const p0 = [-12.6, -6.2], p1 = [-9.0, -6.9];
-    for (const [x, z] of [p0, p1]) { const pg = bx(0.1, 2.2, 0.1, x, groundY(x, z) + 1.1, z, MMd, 0.6); g.add(pg); }
+    for (const [x, z] of [p0, p1]) { colCircle(x, z, 0.15); const pg = bx(0.1, 2.2, 0.1, x, groundY(x, z) + 1.1, z, MMd, 0.6); g.add(pg); }
     ctx.scene.add(g);
     laundry(ctx, new THREE.Vector3(p0[0], groundY(...p0) + 2.1, p0[1]), new THREE.Vector3(p1[0], groundY(...p1) + 2.1, p1[1]));
   }
@@ -597,6 +620,7 @@ export function buildPlaza(ctx) {
       const cloth = new THREE.MeshStandardMaterial({ map: ct, roughness: 1, side: THREE.DoubleSide });
       const cl = m(new THREE.PlaneGeometry(1.56, 0.3), cloth); cl.position.set(0, 0.66, 0.36); t.add(cl);
       place(ctx, t, 10.4, -3.4, -0.12);
+      colBox(10.4, -3.4, 0.8, 0.4, -0.12);
       produce(t, -0.35, 0.81, 0.0, 'bread', R, 5);
       produce(t, 0.35, 0.81, 0.05, 'bread', R, 4);
       ctx.scene.add(blobShadow(10.4, groundY(10.4, -3.4), -3.35, 0.95, 0.5, 0.55));

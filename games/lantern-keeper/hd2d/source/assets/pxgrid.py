@@ -76,7 +76,39 @@ SPEC = {
     'bush': ((0.55, 1.6), 24), 'flowers': ((0.38, 0.65), 20), 'fence': ((0.8, 1.1), 20),
     'great_lantern': ((4.5, 7.0), 40),
 }
-CHARS = {'pip_down_0': 0.95, 'moss_right_0': 0.98, 'mayor': 1.11, 'baker': 1.07, 'guard': 1.16, 'kid': 0.95, 'zuzu': 1.09}
+# Characters: one crisp, outlined rung each on their own (chunkier) texel grid. Sized for an in-world
+# height of PIP_H-multiple * CHAR_SCALE metres at CHAR_PX_PER_M texels per metre, so the party reads
+# ~100-130 px tall at 1080p in the hero shot with every texel ~1.6 screen px. Walk-cycle frames
+# (pip_*/moss_*) are emitted too. pxName() returns the single rung whatever height is asked for.
+CHAR_SCALE, CHAR_PX_PER_M = 1.6, 42
+CHARS = {'mayor': 1.11, 'baker': 1.07, 'guard': 1.16, 'kid': 0.95, 'zuzu': 1.09}
+for _who, _hm in (('pip', 0.95), ('moss', 0.98)):
+    for _d in ('down', 'right', 'up'):
+        for _f in range(4): CHARS[f'{_who}_{_d}_{_f}'] = _hm
+
+def outline(a):
+    """1-texel selective dark outline on the silhouette rim (inside the mask, so the size is kept)."""
+    m = a[..., 3] > 127
+    p = np.pad(m, 1)
+    inner = p[:-2, 1:-1] & p[2:, 1:-1] & p[1:-1, :-2] & p[1:-1, 2:]
+    rim = m & ~inner
+    o = a.copy()
+    c = a[..., :3].astype(np.float32)
+    dark = c * 0.26 + np.array([10, 6, 14], np.float32)
+    o[rim, :3] = np.clip(dark[rim], 0, 255).astype(np.uint8)
+    return o
+
+def make_char(name, H):
+    nat = rgba(os.path.join(NAT, name + '.png'))
+    src = rgba(os.path.join(SRC, name + '.png'))
+    nh, nw = nat.shape[:2]
+    pal = palette_of(nat, 18)
+    if abs(H - nh) <= max(3, nh * 0.06):
+        out = snap(nat, pal)            # native art is already at this size: keep every hand-placed texel
+    else:
+        W = max(1, round(nw * H / nh))
+        out = snap(area_down(src, W, H), pal)
+    return outline(out)
 
 def rungs(lo, hi):
     hs, h = [], lo * PX_PER_M
@@ -94,12 +126,12 @@ def main():
             Image.fromarray(a).save(os.path.join(NAT, f'px_{name}_{H}.png'), optimize=True)
             out[name].append(H)
     for name, hm in CHARS.items():
-        out[name] = []
-        for k in (0.86, 1.0, 1.16):
-            H = int(round(hm * PX_PER_M * k))
-            a = make(name, H, 22)
-            Image.fromarray(a).save(os.path.join(NAT, f'px_{name}_{H}.png'), optimize=True)
-            out[name].append(H)
+        if not os.path.exists(os.path.join(NAT, name + '.png')): continue
+        H = int(round(hm * CHAR_SCALE * CHAR_PX_PER_M))
+        a = make_char(name, H)
+        H = a.shape[0]
+        Image.fromarray(a).save(os.path.join(NAT, f'px_{name}_{H}.png'), optimize=True)
+        out[name] = [H]
     json.dump({'pxPerM': PX_PER_M, 'rungs': out}, open(os.path.join(HERE, 'pxgrid.json'), 'w'), indent=0)
     print(json.dumps(out))
 

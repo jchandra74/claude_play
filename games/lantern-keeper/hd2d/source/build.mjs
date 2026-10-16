@@ -20,9 +20,12 @@ for (const f of fs.readdirSync(assetDir).filter(f => f.endsWith('.png'))) {
 }
 const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Wickhollow Plaza</title>
-<style>html,body{margin:0;height:100%;background:#05070d;overflow:hidden}canvas{display:block;width:100vw;height:100vh}</style>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#05040c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>The Lantern Keeper (HD-2D)</title>
+<style>html,body{margin:0;height:100%;background:#05070d;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}canvas{display:block;width:100vw;height:100vh}</style>
 <script type="importmap">${JSON.stringify({ imports })}</script>
 <script>window.__ASSETS=${JSON.stringify(assets)};</script>
 </head><body>

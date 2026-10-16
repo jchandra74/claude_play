@@ -10,12 +10,15 @@ import * as THREE from 'three';
 const VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
 const COMMON = `
-uniform float uNear, uFar, uFocus, uRange, uAperture, uMaxCoc;
+uniform float uNear, uFar, uFocus, uRange, uAperture, uMaxCoc, uFarK;
 float viewDepth(float d){ float z = d * 2.0 - 1.0; return (2.0 * uNear * uFar) / (uFar + uNear - z * (uFar - uNear)); }
 float cocOf(float depth){
   float dd = depth - uFocus;
   // smooth focal band: ~0 inside +-range, then grows like a thin lens (|d-f|/d) on both sides
   float f = dd - uRange * tanh(dd / uRange);
+  // the far field is held back (uFarK): background roofs / timber keep their texel pattern under the
+  // tilt-shift instead of melting into slabs; the near field keeps the full aperture
+  f *= dd > 0.0 ? mix(uFarK, 1.0, smoothstep(uFocus + 26.0, uFocus + 70.0, depth)) : 1.0;
   return clamp(f * uAperture / depth, -uMaxCoc, uMaxCoc);
 }`;
 
@@ -37,12 +40,15 @@ void main(){
   vec3 col = texture2D(tColor, vUv).rgb;
   float d = texture2D(tDepth, vUv).x;
   float depth = viewDepth(d);
+  // the sky dome (r = 500) writes depth, so 'sky' is anything past the farthest ridgeline
+  float isSky = step(400.0, depth) + step(0.99999, d);
+  isSky = min(isSky, 1.0);
   vec4 ndc = vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
   vec4 vp = uProjInv * ndc; vp /= vp.w;
   vec3 wp = (uViewInv * vp).xyz;
   vec3 ro = uCamPos;
   vec3 rd = normalize(wp - ro);
-  float L = d >= 0.99999 ? 400.0 : length(wp - ro);
+  float L = isSky > 0.5 ? 400.0 : length(wp - ro);
   vec3 haze = vec3(0.0);
   for (int i = 0; i < ${MAX_HAZE}; i++) {
     if (i >= uHazeCount) break;
@@ -60,12 +66,16 @@ void main(){
   float mistH = clamp(1.0 - (wp.y + 1.5) / 4.0, 0.0, 1.0);
   // mist builds up beyond the focal plane (the camera may sit far from the subject on a low tilt)
   float far = 1.0 - exp(-max(L - uFocus * 0.6, 0.0) * 0.02);
-  float skyW = d >= 0.99999 ? exp(-max(rd.y, 0.0) * 14.0) : 1.0;   // only a thin luminous band on the horizon
+  float skyW = isSky > 0.5 ? exp(-max(rd.y, 0.0) * 14.0) : 1.0;   // only a thin luminous band on the horizon
   col += uMistColor * uMist * (mistH * mistH + 0.35) * far * skyW;
   // moonlit air: distant layers recede into luminous blue rather than mud, one step per depth band
-  float air = smoothstep(uFocus + 8.0, uFocus + 70.0, L) * (d >= 0.99999 ? 0.0 : 1.0);
+  float air = smoothstep(uFocus + 8.0, uFocus + 70.0, L) * (1.0 - isSky);
   col = mix(col, col * vec3(0.6, 0.78, 1.05) + uMistColor * 1.2, air * 0.5);
-  gl_FragColor = vec4(col, cocOf(depth));
+  // the sky is a painted backdrop at infinity: keep the moon's rim and the stars crisp
+  // the sky blurs like the ridges down at the ridgeline (so silhouettes melt into it) but stays crisp
+  // above it, where the moon's limb, its halo and the stars must read as sharp as Octopath's backdrops
+  float coc = isSky > 0.5 ? mix(uMaxCoc * 0.6, 1.4, smoothstep(0.105, 0.14, rd.y)) : cocOf(depth);
+  gl_FragColor = vec4(col, coc);
 }`;
 
 const DOWN_FS = `
@@ -131,7 +141,9 @@ uniform sampler2D tSharp, tBlur; varying vec2 vUv;
 void main(){
   vec4 s = texture2D(tSharp, vUv);
   vec4 b = texture2D(tBlur, vUv);
-  float a = smoothstep(0.6, 2.6, abs(s.a));
+  // small far-field CoC stays on the full-res sharp image (the half-res blur would erase 1-px texels);
+  // near-field blur keeps the original quick ramp
+  float a = s.a < 0.0 ? smoothstep(0.6, 2.6, -s.a) : smoothstep(1.8, 5.5, s.a);
   a = max(a, b.a);
   gl_FragColor = vec4(mix(s.rgb, b.rgb, a), 1.0);
 }`;
@@ -241,7 +253,7 @@ export class Pipeline {
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
     this.quad.frustumCulled = false;
     this.quadScene.add(this.quad);
-    const common = { uNear: { value: 0.1 }, uFar: { value: 800 }, uFocus: { value: 30 }, uRange: { value: 3 }, uAperture: { value: 60 }, uMaxCoc: { value: 24 } };
+    const common = { uFarK: { value: 0.5 }, uNear: { value: 0.1 }, uFar: { value: 800 }, uFocus: { value: 30 }, uRange: { value: 3 }, uAperture: { value: 60 }, uMaxCoc: { value: 24 } };
     this.common = common;
     const mk = (fs, uniforms) => new THREE.ShaderMaterial({ vertexShader: VS, fragmentShader: fs, uniforms, depthTest: false, depthWrite: false });
     this.prep = mk(PREP_FS, {

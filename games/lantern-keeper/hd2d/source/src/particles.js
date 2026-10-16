@@ -7,12 +7,14 @@ import * as THREE from 'three';
 import { GREAT_LANTERN_LIGHT, rng, plazaDist, groundAt } from './layout.js';
 import { groundY } from './terrain.js';
 import { quality } from './config.js';
+import { lanternLevelU } from './lighting.js';
 
 const VS = `
 attribute vec4 aSeed;      // random seeds
 attribute vec3 aBase;      // base position
 attribute vec4 aColor;     // rgb + intensity
 attribute float aKind;     // 0 firefly, 1 ember, 2 mote, 3 spark
+uniform float uLan;
 uniform float uTime, uProjScale, uFocus, uRange, uAperture, uMaxCoc;
 uniform sampler2D tDepth; uniform float uNear, uFar; uniform vec2 uRes;
 varying vec4 vColor; varying float vSoft;
@@ -49,11 +51,13 @@ void main(){
               cos(age * 4.0 + aSeed.x * 30.0) * 0.4 * sw + (aSeed.x - 0.5) * 1.2 * age);
     inten *= on * smoothstep(0.0, 0.08, age) * (1.0 - smoothstep(0.3, 0.9, age));
     inten *= 0.65 + 0.35 * sin(t * 13.0 + aSeed.w * 50.0);
+    inten *= uLan * uLan;   // no lantern, no embers
     size = 0.035;
   } else if (aKind < 2.5) {
     // mote: slow drifting dust catching the light
     p += vec3(sin(t * 0.11 + aSeed.x * 20.0) * 0.9, sin(t * 0.17 + aSeed.y * 10.0) * 0.4 + sin(t * 0.05 + aSeed.w * 9.0) * 0.3, cos(t * 0.13 + aSeed.z * 30.0) * 0.9);
     inten *= 0.35 + 0.65 * pow(0.5 + 0.5 * sin(t * 0.9 + aSeed.w * 30.0), 2.0);
+    inten *= 0.12 + 0.88 * uLan;   // dust only glints gold while the lantern lights it
     size = 0.025;
   } else {
     // chimney sparks
@@ -153,7 +157,7 @@ export function buildParticles(ctx) {
   const mat = new THREE.ShaderMaterial({
     vertexShader: VS, fragmentShader: FS,
     uniforms: {
-      uTime: { value: 0 }, uProjScale: { value: 1000 }, uFocus: { value: 30 }, uRange: { value: 3 }, uAperture: { value: 60 }, uMaxCoc: { value: 24 },
+      uLan: lanternLevelU, uTime: { value: 0 }, uProjScale: { value: 1000 }, uFocus: { value: 30 }, uRange: { value: 3 }, uAperture: { value: 60 }, uMaxCoc: { value: 24 },
       tDepth: { value: null }, uRes: { value: new THREE.Vector2() }, uNear: { value: 0.1 }, uFar: { value: 800 },
     },
     blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
