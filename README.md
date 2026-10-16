@@ -27,4 +27,4 @@ games/<slug>/cover.jpg     # 16:9 cover image shown in the catalogue (1280x720)
 
 ## Publishing
 
-GitHub Pages serves the `gh-pages` branch, which mirrors this layout (catalogue at the root, games under `games/`).
+GitHub Pages serves the `main` branch as-is (catalogue at the root, games under `games/`; `.nojekyll` keeps it a plain static site). Merging to `main` publishes.

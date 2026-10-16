@@ -1,6 +1,6 @@
 # Claude Play Arcade
 
-A monorepo of single-file browser games, published to GitHub Pages from the `gh-pages` branch.
+A monorepo of single-file browser games, published to GitHub Pages straight from `main` (merging to `main` publishes).
 
 ## Layout
 
