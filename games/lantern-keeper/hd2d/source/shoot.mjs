@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const q = (args.find(a => a.startsWith('--quality=')) || '--quality=high').split('=')[1];
+const extra = (args.find(a => a.startsWith('--q=')) || '--q=').slice(4);
 const suffix = (args.find(a => a.startsWith('--suffix=')) || '--suffix=').split('=')[1];
 let views = args.filter(a => !a.startsWith('--'));
 if (!views.length) views = ['full', 'house', 'lantern', 'characters', 'terrain', 'tree'];
@@ -17,7 +18,7 @@ for (const v of views) {
   page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') console.log(`[${v}] ${m.type()}: ${m.text().slice(0, 400)}`); });
   page.on('pageerror', e => console.log(`[${v}] pageerror: ${e.message}`));
   const t0 = Date.now();
-  await page.goto('file://' + path.join(root, 'dist/plaza.html') + `?view=${v}&quality=${q}&t=7.3`);
+  await page.goto('file://' + path.join(root, 'dist/plaza.html') + `?view=${v}&quality=${q}&t=7.3${extra ? '&' + extra : ''}`);
   await page.waitForFunction(() => window.__ready || window.__error, null, { timeout: 600000, polling: 500 });
   const err = await page.evaluate(() => window.__error);
   if (err) { console.log(`[${v}] ERROR ${err}`); await page.close(); continue; }

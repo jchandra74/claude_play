@@ -25,16 +25,21 @@ export const quality = QUALITY_PRESETS[params.get('quality')] || QUALITY_PRESETS
 // focus = distance of the focal plane (defaults to dist). range = in-focus half-depth (m).
 // aperture scales blur strength (px of CoC per relative depth offset).
 export const VIEWS = {
-  full:       { target: [0.2, 0.7, -2.3], dist: 29, pitch: 34, yaw: 0, fov: 28, range: 3.6, aperture: 92 },
+  // hero: a low, cinematic tilt (Octopath town framing). Party + Great Lantern sit sharp in the lower
+  // middle; terraces, rooftops, the hilltop chapel, forest, ridgelines and moonlit sky stack above.
+  full:       { target: [0.2, 3.3, 0.6], dist: 27, pitch: 4.5, yaw: 0, fov: 32, focus: 26, range: 2.8, aperture: 18 },
   house:      { target: [8.2, 2.0, -5.6], dist: 13.5, pitch: 24, yaw: -16, fov: 30, range: 1.8, aperture: 40 },
-  lantern:    { target: [0.3, 2.0, -0.4], dist: 14, pitch: 24, yaw: 12, fov: 30, range: 2.2, aperture: 45 },
-  characters: { target: [0.2, 0.55, 1.4], dist: 8.5, pitch: 30, yaw: -4, fov: 30, range: 1.2, aperture: 28 },
+  lantern:    { target: [0.3, 2.6, 0.4], dist: 16, pitch: 11, yaw: 12, fov: 30, range: 2.2, aperture: 30 },
+  characters: { target: [0.2, 1.0, 1.2], dist: 10, pitch: 14, yaw: -4, fov: 30, range: 1.2, aperture: 28 },
   terrain:    { target: [-12.5, 0.8, 3.0], dist: 15, pitch: 34, yaw: 24, fov: 30, range: 2.5, aperture: 45 },
   tree:       { target: [10.2, 2.6, 3.4], dist: 13, pitch: 22, yaw: -22, fov: 30, range: 1.8, aperture: 40 },
 };
 
 export const viewName = VIEWS[params.get('view')] ? params.get('view') : 'full';
-export const view = VIEWS[viewName];
+export const view = { ...VIEWS[viewName] };
+// dev overrides (?pitch=18&dist=30&tx=..), used for framing iteration
+for (const k of ['dist', 'pitch', 'yaw', 'fov', 'focus', 'range', 'aperture']) if (params.has(k)) view[k] = parseFloat(params.get(k));
+['tx', 'ty', 'tz'].forEach((k, i) => { if (params.has(k)) { view.target = [...view.target]; view.target[i] = parseFloat(params.get(k)); } });
 
 // Fixed time (seconds) for deterministic screenshots; otherwise animated.
 export const fixedTime = params.has('t') ? parseFloat(params.get('t')) : null;

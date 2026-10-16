@@ -497,6 +497,8 @@ export function buildProps(ctx) {
     if (L < 3 && !(Math.abs(x) > 24)) continue;
     if (insideHouse(x, z, 1.5)) continue;
     if (R() > 0.06) continue;
+    // keep a clearing in front of the hilltop chapel so its tower reads against the sky
+    if (Math.abs(x + 5.5) < 8 && z > -47 && z < -31) continue;
     const pine = R() < 0.8;
     const hh = pine ? 7 + R() * 3.5 : 6 + R() * 2;
     placeSprite(group, pine ? 'pine' : 'oak', x, z, hh, yaw, { flip: R() < 0.5, selfLight: 0.02 });

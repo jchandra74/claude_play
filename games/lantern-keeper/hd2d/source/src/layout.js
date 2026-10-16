@@ -52,6 +52,10 @@ export const HOUSES = [
   { id: 'far_r', x: 15.5, z: -23.0, w: 5.4, d: 4.4, level: 2, rot: -0.22, floors: 1, gableFront: true, roof: 0xa58a72, style: 'planks',
     door: 'door_oak', doorX: 0.8, windows: [{ t: 'window_lattice', x: -1.2 }], upper: [{ t: 'window_lattice', x: 0 }],
     side: [], chimney: null, light: false },
+  // hilltop chapel with a bell tower: the tall landmark silhouette behind the village
+  { id: 'chapel', x: -6.5, z: -43.5, w: 6.0, d: 5.0, level: 4, rot: 0.06, floors: 2, gableFront: true, roof: 0x7d6a62, style: 'stone',
+    door: 'door_oak', doorX: 0, windows: [{ t: 'window_lattice', x: -1.8 }, { t: 'window_lattice', x: 1.8 }], upper: [{ t: 'window_lattice', x: 0 }],
+    side: [], chimney: null, light: true, tower: 4.3 },
 ];
 
 // ---------- terrain tiers ----------
@@ -261,9 +265,10 @@ export const PROPS = [
   { type: 'pine', x: 10.6, z: -21.0, h: 6.2 },
   // foreground framing (blurred)
   { type: 'pine', x: -12.5, z: 11.5, h: 8.5 },
-  { type: 'oak', x: -7.4, z: 13.0, h: 7.5 },
+  { type: 'oak', x: -15.5, z: 14.0, h: 7.5 },
   { type: 'pine', x: 18.5, z: 13.5, h: 9.0 },
-  { type: 'oak', x: 4.0, z: 15.5, h: 6.5, flip: true },
+  { type: 'oak', x: 13.5, z: 17.5, h: 6.5, flip: true },
+  { type: 'pine', x: -5.9, z: 16.0, h: 8.5 },
 ];
 
 // Fences: polyline segments (x0,z0 -> x1,z1) placed on the ground

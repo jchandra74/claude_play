@@ -250,7 +250,7 @@ export function buildLighting(ctx) {
   patchChunks();
 
   // night atmosphere: deep blue-teal distance fog
-  if (scene.fog) { scene.fog.color.setRGB(0.03, 0.075, 0.15); scene.fog.density = 0.0105; }
+  if (scene.fog) { scene.fog.color.setRGB(0.03, 0.075, 0.15); scene.fog.density = 0.0072; }
 
   // moon: cool, dim, from the moon's direction in the sky (behind-left), rims and casts long shadows
   const moon = new THREE.DirectionalLight(MOON_COLOR, 0.62);
