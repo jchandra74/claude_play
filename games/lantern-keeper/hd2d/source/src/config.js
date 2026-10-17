@@ -19,7 +19,9 @@ export const QUALITY_PRESETS = {
   },
 };
 
-export const quality = QUALITY_PRESETS[params.get('quality')] || QUALITY_PRESETS.high;
+// Phones and tablets default to the light preset; ?quality= always wins.
+const touchDevice = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+export const quality = QUALITY_PRESETS[params.get('quality')] || (touchDevice ? QUALITY_PRESETS.low : QUALITY_PRESETS.high);
 
 // Camera views. Camera orbits `target` at `dist`, `pitch` (deg, down) and `yaw` (deg, around Y).
 // focus = distance of the focal plane (defaults to dist). range = in-focus half-depth (m).
