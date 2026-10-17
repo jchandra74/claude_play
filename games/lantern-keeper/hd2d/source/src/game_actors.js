@@ -43,12 +43,13 @@ function actorMaterial(f0, U, emissive) {
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec2 uTexel, uRimDir; uniform vec3 uRimCol, uFill; uniform vec4 uFlash; uniform float uFade;')
+      .replace('#include <common>', '#include <common>\nuniform vec2 uTexel, uRimDir; uniform vec3 uRimCol, uFill; uniform vec4 uFlash; uniform float uFade, uGhost;')
       .replace('#include <alphatest_fragment>', `#include <alphatest_fragment>
         if (uFade > 0.0) {
           float hd = fract(sin(dot(floor(gl_FragCoord.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
           if (hd < uFade) discard;
-        }`)
+        }
+        diffuseColor.a *= 1.0 - uGhost;`)
       .replace('#include <opaque_fragment>', `{
         float aS = texture2D(map, vMapUv + vec2(uRimDir.x, 0.0) * uTexel).a;
         float aD = texture2D(map, vMapUv + uRimDir * uTexel).a;
@@ -103,6 +104,7 @@ export class Actor {
       uFill: { value: new THREE.Color(0.1, 0.1, 0.12) },
       uFlash: { value: new THREE.Vector4(1, 1, 1, 0) },
       uFade: { value: 0 },
+      uGhost: { value: 0 },
     };
     this.mat = actorMaterial(ref, this.U, o.emissive || 0);
     this.group = new THREE.Group();

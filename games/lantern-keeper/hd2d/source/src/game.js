@@ -979,18 +979,35 @@ export function update(dt) {
     }
     setTree(f, show);
   }
-  // anyone standing in front of Pip and over him on screen turns to a dithered see-through
+  // anyone standing between the camera and Pip whose sprite actually covers him on screen turns
+  // half see-through (real alpha, not a dither), so Pip never vanishes behind an NPC
   {
     const k = Math.min(1, dt * 8), field = G.mode === 'field';
-    const fadeOf = (a, n) => {
+    P.anchor(_p, 0.5); const pd = _p.distanceTo(camera.position); _p.project(camera);
+    const cx = _p.x, cy = _p.y;
+    const ghostOf = (a, n) => {
       let want = 0;
-      if (field && a.visible && !(n && n.lying) && a.z > P.z + 0.05 && a.z - P.z < 3.2 && Math.abs(a.x - P.x) < 0.5 * (a.w + A.pip.w) * 0.8) want = 0.55;
-      a.U.uFade.value += (want - a.U.uFade.value) * k;
-      if (want === 0 && a.U.uFade.value < 0.02) a.U.uFade.value = 0;
+      if (field && a.visible && P.visible && !(n && n.lying)) {
+        a.anchor(_p, 0.5);
+        if (_p.distanceTo(camera.position) < pd - 0.25) {
+          a.anchor(_p, 0.08); _p.project(camera); const y0 = _p.y, x0 = _p.x;
+          a.anchor(_p, 0.95); _p.project(camera); const y1 = _p.y;
+          const hw = Math.abs(y1 - y0) * (a.w / a.hgt) * 0.36;
+          if (Math.abs(cx - x0) < hw && cy > y0 && cy < y1) want = 0.55;
+        }
+      }
+      const U = a.U.uGhost;
+      U.value += (want - U.value) * k;
+      if (want === 0 && U.value < 0.02) U.value = 0;
+      const on = U.value > 0;
+      if (a.mat.transparent !== on) { a.mat.transparent = on; a.mat.depthWrite = !on; a.mat.needsUpdate = true; }
     };
     if (G.mode !== 'battle') {
-      for (const n of npcs) if (!n.joined) fadeOf(n.actor, n);
-      fadeOf(A.moss, null);
+      for (const n of npcs) if (!n.joined) ghostOf(n.actor, n);
+      ghostOf(A.moss, null);
+    } else {
+      for (const n of npcs) if (n.actor.U.uGhost.value) ghostOf(n.actor, n);
+      ghostOf(A.moss, null);
     }
   }
   // player locator ring
