@@ -10,8 +10,11 @@ export async function open(q = '', vp = { width: 844, height: 390 }, opts = {}) 
   const page = await context.newPage();
   const logs = [];
   page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') { logs.push(m.text()); console.log('[console]', m.type(), m.text().slice(0, 300)); } });
-  page.on('pageerror', e => { logs.push(e.message); console.log('[pageerror]', e.message); });
-  await page.goto('file://' + path.join(root, 'dist/plaza.html') + '?quality=low' + (q ? '&' + q : ''));
+  page.on('pageerror', e => { logs.push(e.message); console.log('[pageerror]', e.message); page.evaluate(m => { window.__error = window.__error || m; }, e.message).catch(() => {}); });
+  // default to the low preset unless the caller (or QUALITY=) asks for one; the requested value must win
+  const want = process.env.QUALITY ? 'quality=' + process.env.QUALITY : '';
+  const qq = [q, want].filter(Boolean).join('&');
+  await page.goto('file://' + path.join(root, 'dist/plaza.html') + '?' + (/(^|&)quality=/.test(qq) ? qq : 'quality=low' + (qq ? '&' + qq : '')));
   await page.waitForFunction(() => window.__ready || window.__error, null, { timeout: 600000, polling: 500 });
   const err = await page.evaluate(() => window.__error);
   if (err) console.log('ERROR', err);

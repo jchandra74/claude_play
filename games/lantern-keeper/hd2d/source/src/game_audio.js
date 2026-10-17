@@ -34,6 +34,12 @@ const audio = {
     const ch = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
     this.timer = setInterval(() => this.tick(), 25);
+    // hidden tab: suspend the audio clock (no burst of queued notes when the player comes back)
+    document.addEventListener('visibilitychange', () => {
+      if (!this.ctx) return;
+      if (document.hidden) this.ctx.suspend().catch(() => {});
+      else this.ctx.resume().then(() => { this.nextT = Math.max(this.nextT, this.ctx.currentTime + 0.05); }).catch(() => {});
+    });
     if (this.pending) { const p = this.pending; this.pending = null; this.play(p); }
   },
   setMuted(m) { this.muted = m; if (this.master) this.master.gain.setTargetAtTime(m ? 0 : 0.8, this.ctx.currentTime, 0.05); },
@@ -57,6 +63,12 @@ const audio = {
     const s = this.song;
     if (!s || !this.ctx) return;
     const stepDur = 60 / s.bpm / 2;
+    // after a stall (long frame, background tab) skip the missed steps instead of firing them all at once
+    if (this.nextT < this.ctx.currentTime - 0.05) {
+      const miss = Math.ceil((this.ctx.currentTime - this.nextT) / stepDur);
+      this.step += miss; this.nextT += miss * stepDur;
+      if (s.once && this.step >= s.tracks[0].seq.length) { this.song = null; return; }
+    }
     while (this.nextT < this.ctx.currentTime + 0.12) {
       for (const tr of s.tracks) {
         const tok = tr.seq[this.step % tr.seq.length];

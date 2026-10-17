@@ -507,11 +507,11 @@ export function buildPlaza(ctx) {
   // --- market ---
   const st1 = stall(ctx, -4.5, -6.7, 0.14, ['#b8433a', '#e8dcc0'], 'flat', ['apple', 'cabbage', 'pumpkin']);
   const st2 = stall(ctx, 3.3, -7.4, -0.08, ['#3d6a9a', '#e8dcc0'], 'gable', ['pumpkin', 'apple']);
-  cart(ctx, 6.3, 0.9, -0.55, 'pumpkin');
-  cart(ctx, 9.5, -0.9, 2.6, 'sacks');   // clear of the east stairs' foot (the road to the gate)
+  // the east half of the plaza is kept open: a clear lane runs from the dais to the east stairs and the gate
+  cart(ctx, 8.3, 1.7, 0.04, 'sacks');
   cart(ctx, -8.6, -4.0, 1.9, 'cabbage');
   bench(ctx, -6.4, -2.9, Math.PI / 2 - 0.08);
-  bench(ctx, 4.9, -1.3, -Math.PI / 2 + 0.2);
+  bench(ctx, 3.4, -5.55, 0.02);
   {
     const R = rng(55); const g = new THREE.Group(); g.userData.free = true; ctx.scene.add(g);
     for (const [x, z] of [[-1.0, -7.6], [11.0, -5.1], [-7.2, -6.6], [-4.5, -1.5]]) sack(g, x, groundY(x, z), z, R);
@@ -520,7 +520,7 @@ export function buildPlaza(ctx) {
   // --- low stone planter boxes breaking up the open cobbles ---
   {
     const geos = [];
-    const boxes = [[-3.6, -3.9, 1.6, 0.7, 0.3], [3.9, -4.2, 1.3, 0.7, -0.2], [-4.4, 4.0, 1.4, 0.6, 0.1]];
+    const boxes = [[-3.6, -3.9, 1.6, 0.7, 0.3], [-4.4, 4.0, 1.4, 0.6, 0.1]];
     for (const [x, z, w, d, r] of boxes) {
       colBox(x, z, w / 2 + 0.05, d / 2 + 0.05, r);
       const g = new THREE.BoxGeometry(w, 0.42, d, 1, 2, 1); g.rotateY(r); g.translate(x, 0.21, z);
@@ -549,7 +549,7 @@ export function buildPlaza(ctx) {
   const bA = banner(ctx, -3.3, -11.6, '#8a2f2a', '#e0c070', 3.8);
   const bB = banner(ctx, 0.3, -11.6, '#2f4f7a', '#e0c070', 3.8);
   bunting(ctx, bA, bB, 0.35, ['#c84a3a', '#e8d070', '#4a7ab0', '#e8e0d0']);
-  const bC = banner(ctx, 12.6, 0.2, '#6a3a6a', '#e0c070', 3.4);
+  const bC = banner(ctx, 12.7, 1.55, '#6a3a6a', '#e0c070', 3.4);
 
   // --- laundry on the west terrace ---
   {
@@ -608,8 +608,6 @@ export function buildPlaza(ctx) {
     pot(ctx, -6.45, 1.55, 1.0, 'bush');
     pot(ctx, -4.15, 2.75, 0.85, 'flowers', GOLD);
     hayBale(ctx, 11.2, 1.5, 0.35);
-    basket(ctx, 9.7, 0.95, 'pumpkin', R);
-    pot(ctx, 4.3, -2.35, 0.9, 'flowers', LILAC);
     crateStack(ctx, -7.4, -5.1, 2, R);
     {
       // the baker's trestle table of loaves in front of the bakery
@@ -619,12 +617,11 @@ export function buildPlaza(ctx) {
       const ct = stripeTex('#e8dcc0', '#b8a888', false); ct.repeat.set(4, 1);
       const cloth = new THREE.MeshStandardMaterial({ map: ct, roughness: 1, side: THREE.DoubleSide });
       const cl = m(new THREE.PlaneGeometry(1.56, 0.3), cloth); cl.position.set(0, 0.66, 0.36); t.add(cl);
-      place(ctx, t, 10.4, -3.4, -0.12);
-      colBox(10.4, -3.4, 0.8, 0.4, -0.12);
+      place(ctx, t, 9.5, -4.55, -0.05);
+      colBox(9.5, -4.55, 0.8, 0.4, -0.05);
       produce(t, -0.35, 0.81, 0.0, 'bread', R, 5);
       produce(t, 0.35, 0.81, 0.05, 'bread', R, 4);
-      ctx.scene.add(blobShadow(10.4, groundY(10.4, -3.4), -3.35, 0.95, 0.5, 0.55));
-      basket(ctx, 11.35, -3.0, 'bread', R);
+      ctx.scene.add(blobShadow(9.5, groundY(9.5, -4.55), -4.5, 0.95, 0.5, 0.55));
     }
     // back terrace
     logPile(ctx, -7.6, -13.7, 0.1, 3, 0.9);
@@ -656,7 +653,7 @@ export function buildPlaza(ctx) {
     [crown, new THREE.Vector3(5.6, 2.35, -3.6), 0.5],
     // foreground runs from the front lamps out to the ledge corner posts
     [new THREE.Vector3(-6.6, 2.4, 3.9), new THREE.Vector3(-10.6, 1 + 2.4, 1.6), 0.4],
-    [new THREE.Vector3(3.7, 2.4, 3.3), new THREE.Vector3(12.3, 2.4, -0.5), 0.55],
+    [new THREE.Vector3(3.7, 2.4, 3.3), new THREE.Vector3(12.4, 2.4, 0.9), 0.55],
   ];
   const bulbs = [];
   for (const [a, b, s] of runs) festoon(a, b, s, ctx, wireMat, bulbs);

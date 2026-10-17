@@ -61,22 +61,24 @@ export function bakeCollision() {
     let out = x < -15.0 || x > 21.4 || z < -13.05 || z > 4.35;
     if (x < -8.2 && z < -8.0) out = true;                  // behind the west houses
     if (x > 13 && z > 0.95) out = true;                    // east terrace edge
+    if (x > 19.1 && z < -2.1) out = true;                  // the blind strip behind the east house
     if (x > 20.6) out = !(z > GATE.z0 && z < GATE.z1);    // only the road leaves east
     if (out) g.a[j * g.nx + i] = 1;
   }
   for (const h of HOUSES) if (h.level <= 1) markBox(g, h.x, h.z, h.w / 2 + 0.05, h.d / 2 + 0.05, h.rot);
   for (const p of PROPS) {
     if (p.type === 'great_lantern') {
-      markCircle(g, p.x, p.z, 2.62);                       // the octagonal dais
-      for (let i = 0; i < 8; i++) {                         // flower planters on its rim
-        const a = (i + 0.5) / 8 * Math.PI * 2;
-        if (Math.sin(a) <= 0.7) markCircle(g, p.x + Math.cos(a) * 2.95, p.z + Math.sin(a) * 2.95, 0.2);
-      }
+      // the octagonal dais and the flower planters on its rim, as one smooth circle (no notches
+      // between planters to get wedged in; you glide round it)
+      markCircle(g, p.x, p.z, 3.05);
       continue;
     }
     if (PROP_R[p.type]) markCircle(g, p.x, p.z, PROP_R[p.type]);
   }
   for (const [x0, z0, x1, z1] of FENCES) markSeg(g, x0, z0, x1, z1, 0.12);
+  // the bakery frontage (baker, bread table, pots, barrels by the top of the east stairs) as one smooth
+  // solid block: walking east along it glides you down onto the stairs, no blind pockets to get stuck in
+  markBox(g, 10.0, -4.95, 3.0, 0.72, 0);
   for (const c of COLLIDERS) {
     if (c.t === 'c') markCircle(g, c.x, c.z, c.r);
     else if (c.t === 'box') markBox(g, c.x, c.z, c.hw, c.hd, c.rot);
@@ -103,10 +105,12 @@ export function blocked(area, x, z, self, fx, fz) {
   for (let i = 0; i < DYN.length; i++) {
     const d = DYN[i];
     if (d === self || !d.solid || !d.visible) continue;
+    // elliptical footprint: no box corners to snag on, actors slide round each other
     const rx = d.rx || 0.4, rz = d.rz || 0.3;
-    if (Math.abs(d.x - x) < rx && Math.abs(d.z - z) < rz) {
+    const ex = (d.x - x) / rx, ez = (d.z - z) / rz;
+    if (ex * ex + ez * ez < 1) {
       // already overlapping (spawned / scripted into it): let the actor walk out
-      if (fx !== undefined && Math.abs(d.x - fx) < rx && Math.abs(d.z - fz) < rz) continue;
+      if (fx !== undefined) { const fx2 = (d.x - fx) / rx, fz2 = (d.z - fz) / rz; if (fx2 * fx2 + fz2 * fz2 < 1 && fx2 * fx2 + fz2 * fz2 <= ex * ex + ez * ez) continue; }
       return true;
     }
   }
@@ -119,17 +123,42 @@ function canStep(area, x0, z0, x1, z1, self) {
   if (area === 'town') return Math.abs(groundY(x1, z1) - groundY(x0, z0)) <= 0.3;
   return true;
 }
+// Movement with generous corner / curve sliding: when the straight step is blocked, the actor glides
+// sideways round the obstacle (up to ~60 deg off its heading) instead of stopping dead, keeping the
+// side it chose so it doesn't jitter. Holding one direction carries you round the dais, carts, NPCs.
 export function moveActor(area, a, dx, dz) {
-  let moved = false;
-  if (dx) {
-    if (canStep(area, a.x, a.z, a.x + dx, a.z, a)) { a.x += dx; moved = true; }
-    else for (const s of [1, -1]) if (canStep(area, a.x, a.z, a.x + dx, a.z + s * 0.06, a)) { a.z += s * 0.03; moved = true; break; }
+  const len = Math.hypot(dx, dz);
+  if (len < 1e-6) return false;
+  if (canStep(area, a.x, a.z, a.x + dx, a.z + dz, a)) { a.x += dx; a.z += dz; a.slideSide = 0; return true; }
+  // axis-separated first (sliding along walls)
+  if (dx && dz) {
+    if (canStep(area, a.x, a.z, a.x + dx, a.z, a)) { a.x += dx; return true; }
+    if (canStep(area, a.x, a.z, a.x, a.z + dz, a)) { a.z += dz; return true; }
   }
-  if (dz) {
-    if (canStep(area, a.x, a.z, a.x, a.z + dz, a)) { a.z += dz; moved = true; }
-    else for (const s of [1, -1]) if (canStep(area, a.x, a.z, a.x + s * 0.06, a.z + dz, a)) { a.x += s * 0.03; moved = true; break; }
+  const ux = dx / len, uz = dz / len;
+  const sides = a.slideSide ? [a.slideSide, -a.slideSide] : [1, -1];
+  for (const ang of [0.5, 0.85, 1.2, 1.45, 1.5708]) {
+    let best = null;
+    for (const sd of sides) {
+      const c = Math.cos(ang * sd), sn = Math.sin(ang * sd);
+      const rx = (ux * c - uz * sn) * len * 0.85, rz = (ux * sn + uz * c) * len * 0.85;
+      if (!canStep(area, a.x, a.z, a.x + rx, a.z + rz, a)) continue;
+      // prefer the side that opens up: from there, does the way ahead (0.6 m) clear soonest?
+      let score = 0;
+      for (let k = 1; k <= 8; k++) { const qx = a.x + rx * k * 2.5, qz = a.z + rz * k * 2.5; if (!canStep(area, a.x + rx * (k - 1) * 2.5, a.z + rz * (k - 1) * 2.5, qx, qz, a)) { score += 9; break; } if (!canStep(area, qx, qz, qx + ux * 0.5, qz + uz * 0.5, a)) score++; else break; }
+      if (sd === a.slideSide) score -= 0.5;            // hysteresis: keep a slide going
+      if (!best || score < best.score) best = { rx, rz, sd, score };
+    }
+    if (best) { a.x += best.rx; a.z += best.rz; a.slideSide = best.sd; return true; }
   }
-  return moved;
+  // tight curve: a shorter tangent step still gets round it
+  for (const sd of sides) for (const ang of [1.2, 1.45]) {
+    const c = Math.cos(ang * sd), sn = Math.sin(ang * sd);
+    const rx = (ux * c - uz * sn) * len * 0.4, rz = (ux * sn + uz * c) * len * 0.4;
+    if (canStep(area, a.x, a.z, a.x + rx, a.z + rz, a)) { a.x += rx; a.z += rz; a.slideSide = sd; return true; }
+  }
+  a.slideSide = 0;
+  return false;
 }
 
 // ---------- the Great Lantern level ----------
@@ -217,14 +246,21 @@ export function applyArea(ctx, area) {
 }
 
 // ---------- follow camera ----------
+// Field: an Octopath-style long-lens tilt. The camera sits ~17 m out, looking down ~21 deg and
+// turned 8 deg off-axis so facades recede at an angle; Pip stands a little below centre so the
+// plaza floor recedes behind him and rooftops / terraces stack up to the top of the frame.
+// `ahead` pulls the look-at point up-screen of Pip (m along -z). Dev overrides: ?fdist= ?fpitch= ?fyaw= ?ffov=
+const QS = new URLSearchParams(location.search);
+const qn = (k, d) => QS.has(k) ? parseFloat(QS.get(k)) : d;
 export const CAMS = {
-  field: { dist: 23, pitch: 9, fov: 32, lift: 2.2, range: 2.8, aperture: 20 },
-  battle: { dist: 14.5, pitch: 10, fov: 32, lift: -0.45, range: 1.9, aperture: 44 },
+  field: { dist: qn('fdist', 17), pitch: qn('fpitch', 21), yaw: qn('fyaw', 8), fov: qn('ffov', 30), lift: 1.35, ahead: 0.7, range: 2.6, aperture: 22 },
+  forest: { dist: qn('fdist', 16.5), pitch: qn('fpitch', 17), yaw: qn('fyaw', 6), fov: qn('ffov', 30), lift: 1.45, ahead: 0.4, range: 2.6, aperture: 24 },
+  battle: { dist: 14, pitch: 17, yaw: -6, fov: 30, lift: 0.2, range: 2.2, aperture: 40 },
 };
-export const camState = { x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: 0, dist: 21, pitch: 9, fov: 32, focus: 21, range: 2.6, aperture: 20, lock: false, shake: 0 };
+export const camState = { x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: 0, dist: 21, pitch: 9, yaw: 0, wantYaw: 0, fov: 30, focus: 21, range: 2.6, aperture: 20, lock: false, shake: 0 };
 export function clampCam(area, x, z) {
   if (area === 'forest') return [Math.max(FOREST.x0 + 3, Math.min(FOREST.x0 + 41, x)), Math.max(-6, Math.min(1.5, z))];
-  return [Math.max(-9.5, Math.min(16.5, x)), Math.max(-11.5, Math.min(2.5, z))];
+  return [Math.max(-9.5, Math.min(19.5, x)), Math.max(-11.5, Math.min(3.0, z))];
 }
 const _v = new THREE.Vector3();
 export function placeCamera(camera, cs, dt, snap = false) {
@@ -232,11 +268,13 @@ export function placeCamera(camera, cs, dt, snap = false) {
   cs.x += (cs.tx - cs.x) * k; cs.y += (cs.ty - cs.y) * k; cs.z += (cs.tz - cs.z) * k;
   const kk = snap ? 1 : 1 - Math.pow(0.05, dt);
   cs.dist += (cs.wantDist - cs.dist) * kk; cs.pitch += (cs.wantPitch - cs.pitch) * kk;
-  const p = cs.pitch * Math.PI / 180;
+  if (cs.wantYaw !== undefined) cs.yaw = (cs.yaw ?? cs.wantYaw) + (cs.wantYaw - (cs.yaw ?? cs.wantYaw)) * kk;
+  const p = cs.pitch * Math.PI / 180, yw = (cs.yaw || 0) * Math.PI / 180;
   const sx = cs.shake ? (Math.random() - 0.5) * cs.shake * 0.05 : 0, sy = cs.shake ? (Math.random() - 0.5) * cs.shake * 0.05 : 0;
-  camera.position.set(cs.x + sx, cs.y + Math.sin(p) * cs.dist + sy, cs.z + Math.cos(p) * cs.dist);
+  camera.position.set(cs.x + sx + Math.sin(yw) * Math.cos(p) * cs.dist, cs.y + Math.sin(p) * cs.dist + sy, cs.z + Math.cos(yw) * Math.cos(p) * cs.dist);
   _v.set(cs.x + sx, cs.y + sy, cs.z);
   camera.lookAt(_v);
-  if (camera.fov !== cs.fov) { camera.fov = cs.fov; camera.updateProjectionMatrix(); }
+  cs.fovNow = cs.fovNow === undefined ? cs.fov : cs.fovNow + (cs.fov - cs.fovNow) * kk;
+  if (Math.abs(camera.fov - cs.fovNow) > 1e-3) { camera.fov = cs.fovNow; camera.updateProjectionMatrix(); }
   camera.updateMatrixWorld();
 }

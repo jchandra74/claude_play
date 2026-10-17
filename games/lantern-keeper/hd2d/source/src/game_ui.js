@@ -55,6 +55,7 @@ export const btns = {
   MENU: { x: 0, y: 0, r: 21, down: false },
 };
 export let hits = [];
+export const lastTap = { x: -1, y: -1 };
 export function clearHits() { hits = []; }
 const navRepeat = { dir: '', t: 0 };
 
@@ -76,6 +77,8 @@ cv.addEventListener('pointerdown', e => {
   audio.unlock();
   tryFullscreen(e);
   const x = e.clientX, y = e.clientY;
+  // the rotate-your-phone card is modal: a tap on it must not start the game underneath
+  if (touch.ui && V.cssH > V.cssW * 1.05) return;
   const p = { role: 'tap', x, y };
   ptrs.set(e.pointerId, p);
   for (let i = hits.length - 1; i >= 0; i--) {
@@ -99,7 +102,7 @@ cv.addEventListener('pointerdown', e => {
       return;
     }
   }
-  pressed.tap = true;
+  pressed.tap = true; lastTap.x = x * V.DPR; lastTap.y = y * V.DPR;
 }, { passive: false });
 cv.addEventListener('pointermove', e => {
   const p = ptrs.get(e.pointerId);
@@ -260,22 +263,23 @@ export function updateDialog(dt) {
       const before = Math.floor(dlg.shown);
       dlg.shown = Math.min(total, dlg.shown + dt * 52);
       if (Math.floor(dlg.shown) !== before && Math.floor(dlg.shown) % 2 === 0 && /\w/.test(dlg.text[Math.floor(dlg.shown)] || '')) sfx('blip', VOICES[dlg.name] || 1);
-      if ((pressed.a || pressed.tap || pressed.b) && dlg.t > 0.08) dlg.shown = total;
-    } else if ((pressed.a || pressed.tap || pressed.b) && dlg.t > 0.15) {
+      if ((pressed.a || pressed.tap) && dlg.t > 0.08) dlg.shown = total;
+    } else if ((pressed.a || pressed.tap) && dlg.t > 0.15) {
       const r = dlg.res; G.dlg = null; r();
     }
+    // only Z / Space / Enter / tap advance text (X and Esc no longer skip lines by accident)
     pressed.a = pressed.tap = pressed.b = false;
   }
   const cb = G.choiceBox;
   if (cb) {
     cb.t += dt;
     const n = cb.opts.length;
-    if (pressed.up) { cb.sel = (cb.sel + n - 1) % n; sfx('move'); }
-    if (pressed.down) { cb.sel = (cb.sel + 1) % n; sfx('move'); }
+    if (pressed.up || pressed.left) { cb.sel = (cb.sel + n - 1) % n; sfx('move'); }
+    if (pressed.down || pressed.right) { cb.sel = (cb.sel + 1) % n; sfx('move'); }
     if (pressed.a && cb.t > 0.15) { const r = cb.res, s = cb.sel; G.choiceBox = null; sfx('ok'); r(s); }
-    pressed.a = pressed.tap = false;
+    pressed.a = pressed.tap = pressed.b = pressed.up = pressed.down = pressed.left = pressed.right = false;
   }
-  for (let i = G.toasts.length - 1; i >= 0; i--) { G.toasts[i].t += dt; if (G.toasts[i].t > 2.6) G.toasts.splice(i, 1); }
+  for (let i = G.toasts.length - 1; i >= 0; i--) { G.toasts[i].t += dt; if (G.toasts[i].t > TOAST_T) G.toasts.splice(i, 1); }
   const f = G.fade;
   if (f.a !== f.target) {
     const d = f.speed * dt;
@@ -285,9 +289,12 @@ export function updateDialog(dt) {
   G.cine = lerp(G.cine, G.cineTarget, Math.min(1, dt * 5));
 }
 
+const TOAST_T = 4;
 export function drawDialog() {
   const u = V.S, W = V.W, H = V.H;
-  const dlg = G.dlg;
+  const cb0 = G.choiceBox;
+  // while a choice is open, the question that led to it stays on screen
+  const dlg = G.dlg || (cb0 && cb0.q ? { name: cb0.q.name, text: cb0.q.text, shown: 1e9, q: true } : null);
   if (dlg) {
     const bw = Math.min(V.VW - 16, 360) * u, bh = 52 * u;
     const bx = (W - bw) / 2, by = H - bh - 8 * u - safe.b * V.DPR;
@@ -313,6 +320,7 @@ export function drawDialog() {
       text(dlg.name, bx + 15 * u, by - 6.2 * u, 7 * u, UIC.gold, 'left', 700);
     }
     D.font = font(8 * u);
+    if (dlg.q) { if (!cb0.q.lines || cb0.q.lw !== bw) { cb0.q.lines = wrap(dlg.text, bx + bw - 10 * u - tx); cb0.q.lw = bw; } dlg.lines = cb0.q.lines; dlg.lw = bw; }
     if (!dlg.lines || dlg.lw !== bw) { dlg.lines = wrap(dlg.text, bx + bw - 10 * u - tx); dlg.lw = bw; }
     let left = Math.floor(dlg.shown);
     for (let i = 0; i < dlg.lines.length && left > 0; i++) {
@@ -320,7 +328,7 @@ export function drawDialog() {
       left -= ln.length + 1;
       text(part, tx, by + 8 * u + i * 11 * u, 8 * u);
     }
-    if (dlg.shown >= dlg.text.length && Math.floor(G.t * 3) % 2 === 0) {
+    if (!dlg.q && dlg.shown >= dlg.text.length && Math.floor(G.t * 3) % 2 === 0) {
       const ax = bx + bw - 12 * u, ay = by + bh - 10 * u;
       D.fillStyle = UIC.gold; D.beginPath(); D.moveTo(ax, ay); D.lineTo(ax + 6 * u, ay); D.lineTo(ax + 3 * u, ay + 4 * u); D.fill();
     }
@@ -342,7 +350,7 @@ export function drawDialog() {
     });
   }
   G.toasts.forEach((t, i) => {
-    const a = Math.min(1, t.t * 4, (2.6 - t.t) * 3);
+    const a = Math.min(1, t.t * 4, (TOAST_T - t.t) * 3);
     D.globalAlpha = a;
     D.font = font(8 * u, 700);
     const w = D.measureText(t.str).width + 24 * u;
@@ -447,8 +455,10 @@ export function updateMenu() {
   if (pressed.up) { G.menuOpen.sel = (G.menuOpen.sel + items.length - 1) % items.length; sfx('move'); }
   if (pressed.down) { G.menuOpen.sel = (G.menuOpen.sel + 1) % items.length; sfx('move'); }
   if (pressed.a) items[G.menuOpen.sel].fn();
-  if (pressed.b || pressed.menu) { G.menuOpen = null; sfx('back'); }
-  pressed.a = pressed.b = pressed.menu = pressed.tap = false;
+  G.menuOpen && (G.menuOpen.t += 1 / 60);
+  const outside = () => !(G.menuOpen.rects || []).some(([x, y, w, h]) => lastTap.x >= x && lastTap.x <= x + w && lastTap.y >= y && lastTap.y <= y + h);
+  if (G.menuOpen && (pressed.b || pressed.menu || (pressed.tap && G.menuOpen.t > 0.1 && outside()))) { G.menuOpen = null; sfx('back'); }
+  pressed.a = pressed.b = pressed.menu = pressed.tap = pressed.up = pressed.down = pressed.left = pressed.right = false;
 }
 export function drawMenu() {
   if (!G.menuOpen) return;
@@ -458,27 +468,42 @@ export function drawMenu() {
   panel(px, py, pw, ph);
   text('PARTY', px + 10 * u, py + 8 * u, 8 * u, UIC.gold, 'left', 700);
   party.forEach((m, i) => {
-    const y = py + 24 * u + i * 32 * u;
+    const y = py + 22 * u + i * 30 * u;
     if (!m.joined) return;
     const pc = PORTRAIT[m.id];
     D.imageSmoothingEnabled = false;
-    if (pc) D.drawImage(pc, px + 8 * u, y - 2 * u, 24 * u * pc.width / pc.height, 24 * u);
-    text(`${m.name}  Lv ${m.lv}`, px + 40 * u, y, 7.5 * u, UIC.text, 'left', 700);
-    bar(px + 40 * u, y + 11 * u, pw - 52 * u, 3 * u, m.hp / m.maxHp, '#7aeb8a', `HP ${m.hp}/${m.maxHp}`);
-    bar(px + 40 * u, y + 19 * u, pw - 52 * u, 3 * u, m.sp / m.maxSp, '#7ac8ff', `SP ${m.sp}/${m.maxSp}`);
+    if (pc) D.drawImage(pc, px + 8 * u, y - 1 * u, 24 * u * pc.width / pc.height, 24 * u);
+    text(`${m.name}  Lv ${m.lv}`, px + 38 * u, y, 7.5 * u, UIC.text, 'left', 700);
+    // label | bar | value on one line each, so nothing is drawn over a bar
+    const lx = px + 38 * u, vx = px + pw - 8 * u, bx0 = lx + 12 * u, bw0 = vx - 30 * u - bx0;
+    for (const [k, lab, v, mx, col, dy] of [[0, 'HP', m.hp, m.maxHp, '#7aeb8a', 10], [1, 'SP', m.sp, m.maxSp, '#7ac8ff', 18]]) {
+      void k;
+      text(lab, lx, y + dy * u, 5.5 * u, UIC.dim, 'left', 700, false);
+      bar(bx0, y + (dy + 1.5) * u, bw0, 3 * u, v / mx, col);
+      text(`${v}/${mx}`, vx, y + dy * u, 5.5 * u, UIC.text, 'right', 600, false);
+    }
   });
-  const itemsY = py + 24 * u + 2 * 32 * u;
-  text('Items: ' + (Object.entries(inventory).filter(([, n]) => n > 0).map(([k, n]) => `${ITEMS[k].name} ×${n}`).join(', ') || 'none'), px + 10 * u, itemsY, 6.5 * u, UIC.dim);
+  const itemsY = py + 22 * u + 2 * 30 * u;
+  D.font = font(6 * u);
+  const itemLines = wrap('Items: ' + (Object.entries(inventory).filter(([, n]) => n > 0).map(([k, n]) => `${ITEMS[k].name} ×${n}`).join(', ') || 'none'), pw - 20 * u);
+  itemLines.slice(0, 2).forEach((l, i) => text(l, px + 10 * u, itemsY + i * 8 * u, 6 * u, UIC.dim));
+  if (G.objective) {
+    const gy = itemsY + Math.min(2, itemLines.length) * 8 * u + 3 * u;
+    D.font = font(6.5 * u, 700);
+    text('◆ ' + wrap(G.objective, pw - 24 * u)[0], px + 10 * u, gy, 6.5 * u, UIC.gold, 'left', 700);
+  }
   const items = menuItems();
   const ow = Math.min(150, V.VW * 0.4) * u, oh = items.length * 17 * u + 12 * u, ox = W / 2 + 6 * u, oy = (H - oh) / 2;
   panel(ox, oy, ow, oh);
+  G.menuOpen.rects = [[px, py, pw, ph], [ox, oy, ow, oh]];
   items.forEach((it, i) => {
     const y = oy + 6 * u + i * 17 * u, sel = i === G.menuOpen.sel;
     if (sel) { D.fillStyle = 'rgba(255,215,90,0.16)'; rr(ox + 4 * u, y, ow - 8 * u, 16 * u, 2 * u); D.fill(); }
     text(it.label, ox + 12 * u, y + 4 * u, 8 * u, sel ? UIC.gold : UIC.text, 'left', 600);
     hits.push({ x: ox, y, w: ow, h: 16 * u, fn: () => { G.menuOpen.sel = i; it.fn(); } });
   });
-  text('Keys: arrows/WASD move · Z talk · X back/run · C menu', W / 2, py + ph + 8 * u, 6 * u, UIC.dim, 'center');
+  text(touch.ui ? 'Drag on the left to walk · A talk / confirm · B run · tap outside to close' : 'Arrows/WASD move · Z talk / confirm · X back · Shift run · C menu',
+    W / 2, py + ph + 8 * u, 6 * u, UIC.dim, 'center');
 }
 
 // ---------- title & ending ----------
@@ -508,19 +533,42 @@ export function drawTitle(cover = false) {
   if (!cover) text('Pixels, music & sound generated in code · Made with Claude Code', cx, H - 12 * u - safe.b * V.DPR, 5.5 * u, 'rgba(216,200,255,0.65)', 'center', 500);
   D.globalAlpha = 1;
 }
+// End card: a compact plate in the lower-left corner so the relit plaza stays the picture.
 export function drawEnding() {
-  const u = V.S, W = V.W, H = V.H, cx = W / 2;
+  const u = V.S * 0.78, W = V.W, H = V.H;
   const a = Math.min(1, G.endingT / 2);
   D.globalAlpha = a;
-  const vg = D.createLinearGradient(0, H * 0.4, 0, H); vg.addColorStop(0, 'rgba(6,4,18,0)'); vg.addColorStop(1, 'rgba(6,4,18,0.7)');
+  const vg = D.createLinearGradient(0, H * 0.55, 0, H); vg.addColorStop(0, 'rgba(6,4,18,0)'); vg.addColorStop(1, 'rgba(6,4,18,0.55)');
   D.fillStyle = vg; D.fillRect(0, 0, W, H);
-  const pw = Math.min(300 * u, W - 20 * u), ph = 100 * u, px = (W - pw) / 2, py = H - ph - 12 * u - safe.b * V.DPR;
-  panel(px, py, pw, ph);
-  text('THE LANTERN KEEPER', cx, py + 10 * u, 11 * u, UIC.gold, 'center', 700);
-  text('Demo complete. Thanks for playing!', cx, py + 28 * u, 8 * u, UIC.text, 'center', 600);
-  text(`Battles won: ${G.stats.wins}   ·   Breaks: ${G.stats.breaks}   ·   Pip Lv ${party[0].lv}`, cx, py + 46 * u, 6.5 * u, UIC.dim, 'center', 600);
-  text(G.flags.geraldFriend ? 'Gerald visits on Tuesdays. He brings lint.' : 'Gerald is still on the roof. Nobody knows how to ask him to leave.', cx, py + 60 * u, 6.5 * u, UIC.dim, 'center', 500);
-  text('Chapter 1: coming eventually.', cx, py + 74 * u, 7.5 * u, '#ffb8e0', 'center', 600);
-  if (G.endingT > 3 && Math.floor(G.endingT * 1.6) % 2 === 0) text(touch.ui ? 'Tap to return to the title' : 'Press Z to return to the title', cx, py + ph - 18 * u, 7 * u, UIC.text, 'center', 700);
+  const lines = [
+    G.flags.geraldFriend ? 'Gerald visits on Tuesdays. He brings lint.' : 'Gerald is still on the roof. Nobody knows how to ask him to leave.',
+    `Battles won ${G.stats.wins}  ·  Breaks ${G.stats.breaks}  ·  Pip Lv ${party[0].lv}`,
+  ];
+  D.font = font(6 * u, 600);
+  let tw = 0; for (const l of lines) tw = Math.max(tw, D.measureText(l).width);
+  const pw = Math.min(Math.max(150 * u, tw + 20 * u), W - 24 * u), ph = 58 * u;
+  const px = 12 * u + safe.l * V.DPR, py = H - ph - 8 * u - safe.b * V.DPR;
+  panel(px, py, pw, ph, { r: 3 * u });
+  const tx = px + 10 * u;
+  text('THE LANTERN KEEPER', tx, py + 7 * u, 9 * u, UIC.gold, 'left', 700);
+  text('Demo complete. Thanks for playing!', tx, py + 19 * u, 7 * u, UIC.text, 'left', 600);
+  text(lines[0], tx, py + 30 * u, 6 * u, UIC.dim, 'left', 500);
+  text(lines[1], tx, py + 39 * u, 6 * u, '#ffb8e0', 'left', 600);
+  if (G.endingT > 3 && Math.floor(G.endingT * 1.6) % 2 === 0) text(touch.ui ? 'Tap to return to the title' : 'Press Z to return to the title', W - 14 * u - safe.r * V.DPR, H - 16 * u - safe.b * V.DPR, 7 * u, UIC.text, 'right', 700);
+  D.globalAlpha = 1;
+}
+
+// current goal, top-left of the field view
+export function drawObjective() {
+  if (!G.objective) return;
+  const u = V.S;
+  D.font = font(6.5 * u, 700);
+  const w = D.measureText(G.objective).width + 22 * u, h = 13 * u;
+  const x = 8 * u + safe.l * V.DPR, y = 7 * u + safe.t * V.DPR;
+  D.globalAlpha = 0.9;
+  panel(x, y, w, h, { r: 6 * u, noStuds: true, top: 'rgba(30,24,60,0.82)', bot: 'rgba(12,10,30,0.82)', edge: 'rgba(233,211,154,0.7)' });
+  D.fillStyle = UIC.gold; const dx = x + 8 * u, dy = y + h / 2;
+  D.beginPath(); D.moveTo(dx, dy - 2.5 * u); D.lineTo(dx + 2.5 * u, dy); D.lineTo(dx, dy + 2.5 * u); D.lineTo(dx - 2.5 * u, dy); D.fill();
+  text(G.objective, x + 14 * u, y + 3 * u, 6.5 * u, UIC.text, 'left', 700);
   D.globalAlpha = 1;
 }

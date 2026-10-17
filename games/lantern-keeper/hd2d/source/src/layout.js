@@ -119,7 +119,7 @@ export const STAIRS = [
   { axis: 'x', z: -2.0, edge: -8, w: 2.2, dir: 1, low: 0 },
   { x: 2.5, edge: 5, w: 2.2, dir: 1, low: -1 },
   { x: -9.6, edge: 3, w: 1.8, dir: 1, low: 0 },
-  { axis: 'x', z: -2.2, edge: 13, w: 1.8, dir: -1, low: 0 },
+  { axis: 'x', z: -2.0, edge: 13, w: 4.0, dir: -1, low: 0 },   // wide east stairs: the road to the gate
 ];
 
 // ---------- ground materials ----------
@@ -154,7 +154,7 @@ export function groundAt(x, z) {
   const lane = (Math.abs(x + 1.5 - 0.4 * Math.sin(z * 0.3)) < 1.5 + n && z < -10 && z > -20) ||
     (Math.abs(x - 1.5) < 1.4 + n && z < -19.5 && z > -24) ||
     (Math.abs(z + 2 - 0.5 * Math.sin(x * 0.4)) < 1.3 + n && x < -7 && x > -12) ||
-    (Math.abs(z + 2.2) < 1.1 + n && x > 12.5 && x < 15);
+    (Math.abs(z + 1.8) < 1.9 + n && x > 12.5 && x < 20.5);
   if (lane) cob = 1;
   // dirt paths
   const north = Math.abs(x + 1.5 - 0.8 * Math.sin(z * 0.17)) < 2.2 + n * 1.4 && z < -9;
@@ -233,7 +233,7 @@ export const PROPS = [
   { type: 'lamp', x: -3.3, z: -12.0, h: 2.7 },
   { type: 'lamp', x: 13.8, z: -7.6, h: 2.7 },
   { type: 'lamp', x: -10.6, z: 1.6, h: 2.7 },
-  { type: 'lamp', x: 12.3, z: -0.5, h: 2.7 },
+  { type: 'lamp', x: 12.4, z: 0.9, h: 2.7 },
   // market clutter behind the stalls
   { type: 'crate', x: -6.3, z: -7.3, h: 0.72 }, { type: 'crate', x: -6.0, z: -6.7, h: 0.6, flip: true },
   { type: 'barrel', x: -2.4, z: -7.8, h: 0.8 }, { type: 'barrel', x: -1.9, z: -7.3, h: 0.72 },
@@ -249,7 +249,6 @@ export const PROPS = [
   // open-cobble clusters west of the dais and by the east cart
   { type: 'barrel', x: -4.6, z: -0.9, h: 0.8 }, { type: 'crate', x: -4.1, z: -0.4, h: 0.62 },
   { type: 'crate', x: -4.9, z: -0.2, h: 0.72, flip: true },
-  { type: 'barrel', x: 7.6, z: 0.2, h: 0.78 }, { type: 'crate', x: 8.1, z: 0.8, h: 0.6 },
   // front edge & lower tier
   { type: 'barrel', x: 7.4, z: 3.9, h: 0.8 }, { type: 'crate', x: 8.0, z: 4.4, h: 0.72 },
   { type: 'barrel', x: 0.5, z: -10.2, h: 0.8 }, { type: 'crate', x: 3.6, z: -13.0, h: 0.72 },

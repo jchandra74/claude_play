@@ -6,7 +6,7 @@ import { G, party, inventory, ITEMS, resetParty, wait, say, narrate, choose, toa
 import { audio, sfx } from './game_audio.js';
 import {
   V, D, mountUI, pollInput, clearPressed, clearHits, pressed, inp, touch, updateDialog, drawDialog, drawCine, drawFade, drawControls,
-  drawRotate, drawMenu, updateMenu, openMenu, menuActions, drawTitle, drawEnding, drawBubble, lerp, TAU,
+  drawRotate, drawMenu, updateMenu, openMenu, menuActions, drawTitle, drawEnding, drawBubble, drawObjective, lerp, TAU,
 } from './game_ui.js';
 import { Actor, LIGHT } from './game_actors.js';
 import { pxName, blobShadow } from './props.js';
@@ -51,7 +51,7 @@ const NPC_DEFS = [
   { id: 'moss', name: 'Moss', x: -5.5, z: -2.45, anim: dirAnim('moss', H(1.03)), h: H(1.03), dir: 'down' },
   { id: 'baker', name: 'Mrs. Pennywhistle', x: 7.6, z: -4.6, sprite: 'baker', h: H(1.13) },
   { id: 'zuzu', name: 'Madame Zuzu', x: 5.4, z: 2.4, sprite: 'zuzu', h: H(1.15) },
-  { id: 'fenwick', name: 'Mr. Fenwick', x: 5.85, z: -2.05, four: 'fenwick', h: 1.07 * LO, dir: 'down' },
+  { id: 'fenwick', name: 'Mr. Fenwick', x: 4.75, z: -5.45, four: 'fenwick', h: 1.07 * LO, dir: 'down' },
   { id: 'tobin', name: 'Tobin', x: -3.2, z: 3.55, sprite: 'kid', h: H(1.0), wander: 0.7 },
   { id: 'glen', name: 'Fisherman Glen', x: -5.3, z: 3.25, four: 'glen', h: 1.07 * LO, dir: 'up' },
   { id: 'barnaby', name: 'Guard Barnaby', x: 19.35, z: 0.6, sprite: 'guard', h: H(1.22) },
@@ -73,7 +73,7 @@ export function buildActors(c) {
     if (d.four) anim = { down: [`${d.four}_down`], up: [`${d.four}_up`], right: [`${d.four}_right`], left: [`${d.four}_left`] };
     const a = d.id === 'moss' ? A.moss : new Actor(town, { anim, h: d.h, ground: groundY, x: d.x, z: d.z, dir: d.dir || 'down', flip: d.flip, fps: d.fps || 8, sil: !d.lying });
     const n = { ...d, actor: a, home: { x: d.x, z: d.z }, wt: 0, tx: d.x, tz: d.z, talking: false, walkTo: null };
-    a.solid = true; a.rx = d.rx ? d.rx * LO : 0.5; a.rz = d.rz ? d.rz * LO : 0.34;
+    a.solid = true; a.rx = d.rx ? d.rx * LO : (d.dog || d.cat ? 0.5 : 0.82); a.rz = d.rz ? d.rz * LO : (d.dog || d.cat ? 0.32 : 0.48);
     npcs.push(n);
     DYN.push(a);
   }
@@ -106,7 +106,21 @@ export function buildActors(c) {
   em.scale.set(0.7, 0.7, 1); em.visible = false; em.renderOrder = 12;
   ctx.scene.add(em);
   A.emberSprite = em;
+  // player locator: a soft warm ring on the ground under Pip (blue under the acting hero in battle)
+  const rc = document.createElement('canvas'); rc.width = rc.height = 64;
+  const r2 = rc.getContext('2d');
+  const rg = r2.createRadialGradient(32, 32, 14, 32, 32, 31);
+  rg.addColorStop(0, 'rgba(255,255,255,0)'); rg.addColorStop(0.55, 'rgba(255,255,255,0.0)'); rg.addColorStop(0.72, 'rgba(255,255,255,1)');
+  rg.addColorStop(0.84, 'rgba(255,255,255,0.35)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
+  r2.fillStyle = rg; r2.fillRect(0, 0, 64, 64);
+  const rt = new THREE.CanvasTexture(rc); rt.colorSpace = THREE.SRGBColorSpace;
+  const ring = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: rt, color: new THREE.Color(1.6, 1.0, 0.45), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+  ring.renderOrder = 3; ring.frustumCulled = false;
+  ctx.scene.add(ring);
+  A.ring = ring;
+  actorMeshes = new Set([A.pip, A.moss, A.gerald, ...npcs.map(n => n.actor), ...enemiesOnMap.map(e => e.actor), ...Object.values(battleEnemies).flat()].map(a => a.mesh));
 }
+let actorMeshes = new Set();
 
 function buildGate() {
   const y = groundY(GATE.x, -0.2);
@@ -147,7 +161,7 @@ function buildGate() {
 // after the lighting pass: forest pools, Pip's hand-lantern pool, lamp order, probes
 export function afterLighting() {
   forestFx = forestLights(ctx);
-  pipPool = { pos: new THREE.Vector3(), color: new THREE.Color(1.0, 0.62, 0.3), intensity: 1.5, radius: 3.4, core: 1.2, prio: -2, seed: 7.3, weight: 99 };
+  pipPool = { pos: new THREE.Vector3(), color: new THREE.Color(1.0, 0.62, 0.3), intensity: 2.3, radius: 4.2, core: 1.2, prio: -2, seed: 7.3, weight: 99 };
   gerald.pool = { pos: new THREE.Vector3(), color: new THREE.Color(1.0, 0.55, 0.22), intensity: 4, radius: 5.5, core: 0.5, prio: -2, seed: 2.1, weight: 99 };
   ctx.pools.unshift(pipPool, gerald.pool, ...STAGE_POOLS);
   const L = GREAT_LANTERN_LIGHT;
@@ -163,17 +177,49 @@ export function afterLighting() {
   LIGHT.extra = extra;
   // tall foreground framing trees: hidden while they would cover the middle of a follow shot
   const wp = new THREE.Vector3();
+  // an oak is a trunk sprite plus a separate leaf-card canopy mesh at the same spot: pair them up
+  const bare = [];
+  ctx.scene.traverse(o => { if (o.isMesh && !o.userData.size && !o.userData.sprite) { o.getWorldPosition(wp); if (wp.x < 300) bare.push({ o, p: wp.clone() }); } });
   ctx.scene.traverse(o => {
     if (!o.isMesh || !o.userData.size || o.userData.size[1] < 0.5) return;
     o.getWorldPosition(wp);
     const forest = wp.x > 300;
-    if (!forest && o.userData.size[1] < 3.5) return;
-    if (forest || wp.z > 9) fgTrees.push({ o, p: wp.clone(), h: o.userData.size[1], w: o.userData.size[0], forest });
+    if (actorMeshes.has(o)) return;
+    if (!forest && !/pine|oak|tree|bush|hedge/.test(o.userData.sprite || '')) return;
+    if (!forest && o.userData.size[1] < 1.2) return;
     // the road to the Whisperwood gate is kept clear of the random side trees
-    if (!forest && wp.x > 17.5 && wp.x < 24 && wp.z > -3.5 && wp.z < 3.5) o.visible = false;
+    // town trees are a group (oak trunk sprite + its leaf-card canopy): hide the whole group
+    const tgt = !forest && o.parent && o.parent.isGroup && !o.parent.isScene && o.parent.children.length <= 6 ? o.parent : o;
+    if (!forest && wp.x > 17.5 && wp.x < 27.5 && wp.z > -3.5 && wp.z < 8.5) { tgt.visible = false; if (/oak/.test(o.userData.sprite)) fgTrees.push({ o: tgt, mates: [], p: wp.clone(), h: 0, w: o.userData.size[0], forest, dead: true }); return; }
+    const mates = /oak/.test(o.userData.sprite || '') ? bare.filter(b => b.p.distanceTo(wp) < 0.05).map(b => b.o) : [];
+    if (!forest && wp.x > 17.5 && wp.x < 27.5 && wp.z > -3.5 && wp.z < 8.5) for (const m of mates) m.visible = false;
+    fgTrees.push({ o: tgt, mates, p: wp.clone(), h: o.userData.size[1], w: o.userData.size[0], forest, frame: forest || (wp.z > 9 && o.userData.size[1] >= 3.5) });
   });
+  // oak canopies are leaf cards shared across every oak in a few InstancedMeshes (props.js): give each
+  // town oak the list of its own instances so hiding the oak can collapse them (zero-scale matrices)
+  const oaks = fgTrees.filter(f => !f.forest && /oak/.test(f.o.userData.sprite || ''));
+  const m4 = new THREE.Matrix4(), pv = new THREE.Vector3();
+  ctx.scene.traverse(o => {
+    if (!o.isInstancedMesh || !o.geometry.attributes.aHi) return;
+    for (let i = 0; i < o.count; i++) {
+      o.getMatrixAt(i, m4); pv.setFromMatrixPosition(m4);
+      for (const f of oaks) {
+        if (Math.abs(pv.x - f.p.x) < f.w * 0.7 && Math.abs(pv.z - f.p.z) < f.w * 0.6 && pv.y > f.p.y) {
+          (f.cards || (f.cards = [])).push({ im: o, i, m: m4.clone() }); break;
+        }
+      }
+    }
+  });
+  for (const f of oaks) if (!f.o.visible || (f.p.x > 17.5 && f.p.x < 27.5 && f.p.z > -3.5 && f.p.z < 8.5)) setCards(f, false);
   menuActions.toTitle = () => runScript(async () => { await fadeTo(1, 0.6); toTitle(); });
 }
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+function setCards(f, show) {
+  if (!f.cards || f.cardsShown === show) return;
+  f.cardsShown = show;
+  for (const c of f.cards) { c.im.setMatrixAt(c.i, show ? c.m : ZERO); c.im.instanceMatrix.needsUpdate = true; }
+}
+function setTree(f, show) { f.o.visible = show; for (const m of f.mates) m.visible = show; setCards(f, show); }
 
 // ---------------- state reset ----------------
 function placeNPCsHome() {
@@ -214,15 +260,22 @@ function setArea(area) {
   A.pip.ground = g; A.moss.ground = g;
   env.ground = g;
 }
+const fieldCam = () => G.area === 'forest' ? CAMS.forest : CAMS.field;
 function snapCamToPlayer() {
-  const c = CAMS.field;
-  const [tx, tz] = clampCam(G.area, A.pip.x, A.pip.z);
-  Object.assign(camState, { tx, tz, ty: A.pip.ground(A.pip.x, A.pip.z) + c.lift, wantDist: c.dist, wantPitch: c.pitch, range: c.range, aperture: c.aperture, lock: false });
-  camState.x = camState.tx; camState.y = camState.ty; camState.z = camState.tz; camState.dist = c.dist; camState.pitch = c.pitch;
+  const c = fieldCam();
+  const [tx, tz] = clampCam(G.area, A.pip.x, A.pip.z - c.ahead);
+  Object.assign(camState, { tx, tz, ty: A.pip.ground(A.pip.x, A.pip.z) + c.lift, wantDist: c.dist, wantPitch: c.pitch, wantYaw: c.yaw, fov: c.fov, range: c.range, aperture: c.aperture, lock: false, focusOverride: null });
+  snapCam();
+}
+function snapCam() { Object.assign(camState, { x: camState.tx, y: camState.ty, z: camState.tz, dist: camState.wantDist, pitch: camState.wantPitch, yaw: camState.wantYaw, fovNow: camState.fov }); }
+// a locked cutscene framing (smoothly blended unless snap)
+function shotCam(tx, ty, tz, dist, pitch, yaw = 0, fov = 30, snap = false) {
+  Object.assign(camState, { tx, ty, tz, wantDist: dist, wantPitch: pitch, wantYaw: yaw, fov, lock: true });
+  if (snap) snapCam();
 }
 function heroCam(snap, ty = 3.3) {
-  Object.assign(camState, { tx: 0.2, ty, tz: 0.6, wantDist: 27, wantPitch: 4.5, range: 2.8, aperture: 18, lock: true, focusOverride: 26 });
-  if (snap) { camState.x = 0.2; camState.y = ty; camState.z = 0.6; camState.dist = 27; camState.pitch = 4.5; }
+  Object.assign(camState, { tx: 0.2, ty, tz: 0.6, wantDist: 27, wantPitch: 4.5, wantYaw: 0, fov: 32, range: 2.8, aperture: 18, lock: true, focusOverride: 26 });
+  if (snap) snapCam();
 }
 
 // ---------------- conversations ----------------
@@ -245,6 +298,7 @@ const TALK = {
       await say('Mayor Bramblewick', 'I\'d come myself, but my hat is not rated for forests.');
       G.flags.mayor = true;
       toast('Find a buddy, then head to the east gate');
+      G.objective = 'Find a buddy (Moss broods by the bench)';
     } else if (!G.flags.moss) await say('Mayor Bramblewick', 'Go, brave Pip! Find a buddy! I\'ll be right here. Being brave. In my mind.');
     else await say('Mayor Bramblewick', 'A buddy! Wonderful! Off to the east gate, you two! Bring back the flame! And maybe a souvenir!');
   },
@@ -270,6 +324,7 @@ const TALK = {
     G.flags.moss = true;
     await say('Moss', 'I\'ll bring my slingshot. And my sighs. Lead the way.');
     toast('Head to the east gate');
+    G.objective = 'Talk to Guard Barnaby at the east gate';
   },
   async baker() {
     if (!G.flags.cookies) {
@@ -319,6 +374,7 @@ const TALK = {
       GATE.open = true;
       G.shake = 1.5;
       toast('The east gate is open!');
+      G.objective = 'Go east into the Whisperwood';
       await say('Guard Barnaby', 'I\'ll be right here, guarding the... well, everything.');
     }
   },
@@ -334,7 +390,7 @@ const CHECKS = [
     else await narrate('THE GREAT LANTERN. Lit three hundred years ago. Please do not lick. (The cage is cold and dark.)');
   } },
   { id: 'well', area: 'town', x: -5.2, z: 2.0, r: 1.25, async fn() { await narrate('You peer into the well. The well peers back. It\'s a well.'); } },
-  { id: 'bench', area: 'town', x: 4.9, z: -1.3, r: 1.0, async fn() { await narrate('A bench. Someone has carved BUS STOP into it. Then "SOON". Then "PROBABLY NOT".'); } },
+  { id: 'bench', area: 'town', x: 3.4, z: -5.55, r: 1.0, async fn() { await narrate('A bench. Someone has carved BUS STOP into it. Then "SOON". Then "PROBABLY NOT".'); } },
   { id: 'gate', area: 'town', x: GATE.x - 0.2, z: -0.15, r: 1.2, when: () => !GATE.open, async fn() { await narrate('A barrier with a sign: CLOSED. ASK BARNABY. Barnaby is standing right there.'); } },
   { id: 'sign', area: 'forest', get x() { return FOREST.sign.x; }, get z() { return FOREST.sign.z; }, r: 1.1, async fn() { await narrate('WHISPERWOOD. Beware of: moths, shrubs, feelings.'); } },
   { id: 'mushroom', area: 'forest', x: FOREST.x0 + 14, z: 0, r: 0, async fn() { await narrate('A glowing mushroom. It hums faintly. Don\'t eat it. (You were going to eat it.)'); } },
@@ -446,7 +502,7 @@ function updateField(dt) {
       a.x = en.x; a.z = en.z;
       moveActor('forest', a, (P.x - en.x) / d * sp * dt, (P.z - en.z) / d * sp * dt);
       en.x = a.x; en.z = a.z;
-      if (d < 0.75) { runScript(() => encounter(en)); break; }
+      if (d < 1.05) { runScript(() => encounter(en)); break; }
     } else {
       en.alert = Math.max(0, en.alert - dt);
       en.wt -= dt;
@@ -472,11 +528,13 @@ function updateField(dt) {
   GATE.pivot.rotation.x = -gateAnim * Math.PI * 0.47;
   // camera
   if (!camState.lock) {
-    const c = CAMS.field;
+    const c = fieldCam();
     const [lx, lz] = P.moving ? DIRV[P.dir] : [0, 0];
-    const [tx, tz] = clampCam(G.area, P.x + lx * 1.3, P.z + lz * 0.6);
+    // look ahead along the walk (further when heading east toward the gate / along the forest path)
+    const [tx, tz] = clampCam(G.area, P.x + lx * (lx > 0 ? 2.2 : 1.4), P.z - c.ahead + lz * 0.5);
     camState.tx = tx; camState.tz = tz; camState.ty = P.ground(P.x, P.z) + c.lift;
-    camState.wantDist = c.dist; camState.wantPitch = c.pitch; camState.range = c.range; camState.aperture = c.aperture;
+    camState.wantDist = c.dist; camState.wantPitch = c.pitch; camState.wantYaw = c.yaw; camState.fov = c.fov;
+    camState.range = c.range; camState.aperture = c.aperture;
     camState.focusOverride = null;
   }
   // music by area
@@ -508,6 +566,7 @@ async function gotoArea(area, x, z, dir) {
     await fadeTo(0, 0.6);
     await say('Moss', 'The Whisperwood. It\'s whispering. Mostly about us.');
     await say('Moss', 'Monsters wander the path. Bump into one and we fight. Or don\'t, and we don\'t.');
+    G.objective = 'Follow the path east and find the flame';
     return;
   }
   await fadeTo(0, 0.6);
@@ -534,7 +593,7 @@ async function encounter(en) {
   if (r === 'win') { en.alive = false; en.actor.visible = false; }
   else {
     en.actor.visible = true;
-    if (r === 'flee') { en.cool = 3; en.x = en.hx; en.z = en.hz; A.pip.x -= 1.2; }
+    if (r === 'flee') { en.cool = 3; en.x = en.hx; en.z = en.hz; for (let i = 0; i < 24; i++) moveActor('forest', A.pip, -0.05, 0); A.moss.x = A.pip.x - 0.8; A.moss.z = A.pip.z; trail.length = 0; }
     else {
       for (const m of party) { m.hp = m.maxHp; m.sp = m.maxSp; }
       Object.assign(A.pip, { x: FOREST.x0 + 0.6, z: FOREST.z0 + pathZ(0.6), dir: 'right' });
@@ -580,15 +639,16 @@ async function introScene() {
   G.cineTarget = 0;
   G.flags.intro = true;
   toast(touch.ui ? 'Drag on the left to walk · A to talk' : 'Arrows/WASD to walk · Z to talk · Shift to run');
+  G.objective = 'Find the Mayor in the plaza';
 }
 
 async function geraldScene() {
   G.flags.gerald = true;
+  G.objective = 'Get the flame back from Gerald';
   G.cineTarget = 1;
   audio.stopMusic();
   A.pip.moving = false;
-  camState.lock = true;
-  camState.tx = FOREST.x0 + FOREST.clearX - 1.5; camState.tz = FOREST.z0 + FOREST.clearZ; camState.ty = 2.4; camState.wantDist = 17; camState.wantPitch = 8;
+  shotCam(FOREST.x0 + FOREST.clearX - 1.0, 2.0, FOREST.z0 + FOREST.clearZ, 16, 13, 4);
   await wait(1.3);
   await say('???', 'Mmm... so warm... so shiny...');
   await say('Moss', 'Oh no.');
@@ -624,8 +684,7 @@ async function bossFight() {
     Object.assign(A.pip, { x: cx + 2.4, z: cz - 0.2, dir: 'left' });
     Object.assign(A.moss, { x: cx + 3.2, z: cz + 0.5, dir: 'left' });
     trail.length = 0;
-    camState.lock = true;
-    Object.assign(camState, { tx: cx + 0.2, tz: cz, ty: 2.2, wantDist: 16, wantPitch: 8 });
+    shotCam(cx + 0.6, 1.9, cz, 15, 13, 4);
     await fadeTo(0, 0.5);
     if (r === 'win') break;
     for (const m of party) if (m.joined) { m.hp = m.maxHp; m.sp = m.maxSp; }
@@ -657,6 +716,7 @@ async function geraldAfter() {
   g.visible = false; gerald.fly = 0;
   await say('Moss', 'Well. That was a lot of moth.');
   await say('Moss', 'Let\'s go home, Lantern Keeper. Before my eyeliner wears off.');
+  G.objective = 'Relight the Great Lantern';
   await relightScene();
 }
 
@@ -717,7 +777,7 @@ async function relightScene() {
   // a familiar silhouette on a rooftop
   const g = A.gerald;
   Object.assign(g, { x: -4.3, z: -14.0, lift: 6.55, ground: groundY }); g.visible = true; gerald.onRoof = true;
-  Object.assign(camState, { ty: 4.6, wantPitch: 6 });
+  Object.assign(camState, { ty: 4.6, wantPitch: 7 });
   await wait(1.2);
   await say('Gerald', 'So pretty...');
   await say('Moss', '...He\'s on the roof.');
@@ -795,9 +855,11 @@ export function update(dt) {
   else if (G.mode === 'ending') updateEnding(dt);
   // Pip's hand lantern pool + Gerald's tummy glow
   const P = A.pip;
-  pipPool.pos.set(P.x + 0.25, P.ground(P.x, P.z) + 0.6, P.z + 0.2);
-  pipPool.intensity = A.pip.visible ? 1.5 : 0;
-  LIGHT.extra[0].x = P.x + 0.25; LIGHT.extra[0].z = P.z + 0.2;
+  // the hand lantern sits in Pip's hand: on his right when facing right / down, left when facing left
+  const hand = (P.dir === 'left' ? -1 : 1) * (P.dir === 'up' ? -0.6 : 1) * 0.25;
+  pipPool.pos.set(P.x + hand, P.ground(P.x, P.z) + 0.6, P.z + 0.2);
+  pipPool.intensity = A.pip.visible ? (G.area === 'forest' ? 2.6 : 2.3 * (1 - 0.5 * G.lanternK)) : 0;
+  LIGHT.extra[0].x = P.x + hand; LIGHT.extra[0].z = P.z + 0.2;
   const g = A.gerald;
   const gOn = g.visible && gerald.ember !== false && G.area === 'forest';
   g.anchor(gerald.pool.pos, 0.3);
@@ -842,20 +904,52 @@ export function update(dt) {
   placeCamera(camera, camState, dt);
   const hero = G.mode === 'title' || G.mode === 'ending' || camState.focusOverride;
   // occluders: tall sprites standing between the camera and the action are hidden while they
-  // would cover it (town: only the foreground framing trees; forest / battle: anything in front)
+  // would cover it (town: framing trees over the middle of the shot and any tree / bush in front of
+  // Pip; forest / battle: anything in front)
   const inBattle = G.mode === 'battle' && G.battle;
-  const refZ = inBattle ? G.battle.cz + 1.6 : A.pip.z + 2.4;
+  // in battle every forest sprite in front of the back row goes, so nothing stands over the cast
+  const refZ = inBattle ? G.battle.cz - 1.5 : A.pip.z + 2.4;
+  // Pip's on-screen box (NDC), padded
+  P.anchor(_p, 0); _p.project(camera); const py0 = _p.y, pxc = _p.x;
+  P.anchor(_p, 1.05); _p.project(camera); const py1 = _p.y;
+  const pw = Math.abs(py1 - py0) * 0.42;
   for (const f of fgTrees) {
-    if (hero) { f.o.visible = true; continue; }
+    if (f.dead) continue;
+    if (hero) { setTree(f, true); continue; }
     if (f.forest !== (G.area === 'forest')) continue;
-    if (f.forest && f.p.z < refZ + (f.h < 3 ? 1.2 : 0)) { f.o.visible = true; continue; }
-    if (Math.abs(f.p.x - camera.position.x) > 30) continue;
+    if (f.forest && f.p.z < refZ + (f.h < 3 ? 1.2 : 0)) { setTree(f, true); continue; }
+    if (Math.abs(f.p.x - camera.position.x) > 30) { setTree(f, true); continue; }
     // the sprite's horizontal extent on screen, tested against the middle of the frame
     _p.set(f.p.x - f.w * 0.4, f.p.y + f.h * 0.5, f.p.z).project(camera);
     const xa = _p.x, za = _p.z;
     _p.set(f.p.x + f.w * 0.4, f.p.y + f.h * 0.5, f.p.z).project(camera);
+    const xb = _p.x;
     const lim = inBattle ? 0.98 : 0.9;
-    f.o.visible = za > 1 || xa > lim || _p.x < -lim;
+    let show = !f.frame || za > 1 || xa > lim || xb < -lim;
+    if (show && !f.forest && !inBattle && f.p.z > P.z + 0.3 && Math.abs(f.p.x - P.x) < f.w + 6) {
+      // a town tree / bush in front of Pip that covers him
+      _p.set(f.p.x, f.p.y + f.h * 0.92, f.p.z).project(camera);
+      const yt = _p.y;
+      _p.set(f.p.x, f.p.y + f.h * 0.12, f.p.z).project(camera);
+      const yb = _p.y;
+      if (xa < pxc + pw && xb > pxc - pw && yt > py0 + (py1 - py0) * 0.35 && yb < py1) show = false;
+      // big foliage right in front of the lens that reaches up into the middle of the frame
+      else if (f.p.z > P.z + 4.5 && f.h > 1.2 && xa < 0.55 && xb > -0.55 && yt > -0.25) show = false;
+    }
+    setTree(f, show);
+  }
+  // player locator ring
+  const R = A.ring;
+  let ra = null;
+  if (G.mode === 'field' && P.visible && !gerald.fly) ra = P;
+  else if (inBattle && G.battle.actor && G.battle.actor.actor) ra = G.battle.actor.actor;
+  R.visible = !!ra && G.fade.a < 0.95 && G.cine < 0.05;
+  if (ra) {
+    const gy = ra.ground(ra.x, ra.z) + 0.035;
+    R.position.set(ra.x + ra.ox, gy, ra.z + ra.oz + 0.05);
+    const pulse = 1 + 0.06 * Math.sin(G.t * 4);
+    R.scale.set(1.25 * pulse, 1, 0.9 * pulse);
+    R.material.color.setRGB(...(inBattle ? [0.5, 1.1, 1.8] : [1.7, 1.05, 0.45])).multiplyScalar(G.area === 'forest' || inBattle ? 1 : 1 - 0.35 * G.lanternK);
   }
 }
 
@@ -894,6 +988,7 @@ export function drawOverlay() {
   D.globalCompositeOperation = 'source-over';
   if (G.flash > 0) { D.fillStyle = `rgba(255,236,200,${Math.min(0.85, G.flash)})`; D.fillRect(0, 0, V.W, V.H); }
   // talk bubble over the NPC Pip is facing; "!" over alerted monsters
+  if (G.mode === 'field' && !blocking() && G.cine < 0.05) drawGoal();
   if (G.mode === 'field' && !blocking()) {
     const t = G.target;
     if (t && t.n) { const s = toScreen(t.n.actor, t.n.lying ? 1.4 : 1.12); drawBubble(s[0], s[1], '…'); }
@@ -902,11 +997,52 @@ export function drawOverlay() {
   if (G.mode === 'title') drawTitle();
   if (G.mode === 'ending') drawEnding();
   drawCine();
-  if (G.mode === 'field') drawControls();
+  if (G.mode === 'field') { drawControls(); if (!blocking() && G.cine < 0.05 && G.fade.a < 0.5) drawObjective(); }
   drawFade();
   drawDialog();
   drawMenu();
   clearPressed();
+}
+
+// ---------------- where to go next ----------------
+// The current goal (the next person to talk to, or the open gate) gets a bobbing gold marker over it;
+// when it is off-screen a gold arrow at the screen edge points the way.
+function goalPos() {
+  if (G.area !== 'town' || !G.flags.intro || G.flags.gerald) return null;
+  const at = (id) => { const a = npc(id).actor; a.anchor(_g, 1.12); return _g; };
+  if (!G.flags.mayor) return at('mayor');
+  if (!G.flags.moss) return at('moss');
+  if (!GATE.open) return at('barnaby');
+  return _g.set(GATE.x + 0.6, groundY(GATE.x, -0.15) + 1.6, -0.15);
+}
+const _g = new THREE.Vector3();
+function drawGoal() {
+  const g = goalPos();
+  if (!g) return;
+  const u = V.S, s = toScreenV(g.x, g.y, g.z);
+  const m = 22 * u;
+  const on = s[2] < 1 && s[0] > m && s[0] < V.W - m && s[1] > m && s[1] < V.H - m;
+  const t = G.target && G.target.n && G.target.n.actor;
+  D.save();
+  if (on) {
+    if (t && Math.abs(toScreen(t, 1.12)[0] - s[0]) < 2) { D.restore(); return; }   // the talk bubble is already there
+    const y = s[1] - 4 * u + Math.sin(G.t * 4) * 2 * u;
+    D.fillStyle = 'rgba(20,10,30,0.6)';
+    D.beginPath(); D.moveTo(s[0] - 6 * u, y - 7 * u + u); D.lineTo(s[0] + 6 * u, y - 7 * u + u); D.lineTo(s[0], y + u * 1.5); D.fill();
+    D.fillStyle = '#ffd75a';
+    D.beginPath(); D.moveTo(s[0] - 5 * u, y - 7 * u); D.lineTo(s[0] + 5 * u, y - 7 * u); D.lineTo(s[0], y); D.fill();
+  } else {
+    // edge arrow toward the goal (behind the camera: flip so it still points the right way)
+    let dx = s[0] - V.W / 2, dy = s[1] - V.H / 2;
+    if (s[2] > 1) { dx = -dx; dy = -dy; }
+    const k = Math.min((V.W / 2 - m) / Math.max(1e-3, Math.abs(dx)), (V.H / 2 - m) / Math.max(1e-3, Math.abs(dy)));
+    const x = V.W / 2 + dx * k, y = V.H / 2 + dy * k, a = Math.atan2(dy, dx);
+    D.translate(x, y); D.rotate(a);
+    D.globalAlpha = 0.75 + 0.25 * Math.sin(G.t * 5);
+    D.fillStyle = 'rgba(20,10,30,0.6)'; D.beginPath(); D.arc(0, 0, 9 * u, 0, TAU); D.fill();
+    D.fillStyle = '#ffd75a'; D.beginPath(); D.moveTo(6 * u, 0); D.lineTo(-3 * u, -5 * u); D.lineTo(-3 * u, 5 * u); D.fill();
+  }
+  D.restore();
 }
 
 // ---------------- boot / debug scenes ----------------
@@ -922,11 +1058,12 @@ function debugScene(s) {
   G.fade.a = 0; G.fade.target = 0;
   G.flags.intro = true;
   const joinMoss = () => {
-    G.flags.mayor = G.flags.moss = true; party[1].joined = true; follower.active = true; npc('moss').joined = true; GATE.open = true; gateAnim = 1; inventory.cookie = 3;
+    G.flags.mayor = G.flags.moss = true; party[1].joined = true; follower.active = true; npc('moss').joined = true; A.moss.solid = false; GATE.open = true; gateAnim = 1; inventory.cookie = 3;
   };
   if (s === 'town') { Object.assign(A.pip, { x: 0, z: 2.6, dir: 'up' }); }
+  if (s === 'moss') { joinMoss(); GATE.open = false; gateAnim = 0; Object.assign(A.pip, { x: -4.6, z: -2.45, dir: 'right' }); Object.assign(A.moss, { x: -5.5, z: -2.45 }); G.objective = 'Talk to Guard Barnaby at the east gate'; }
   if (s === 'gate') { joinMoss(); GATE.open = false; gateAnim = 0; Object.assign(A.pip, { x: 17.5, z: -0.1, dir: 'right' }); }
-  if (s === 'forest' || s === 'boss' || s === 'battle' || s === 'bossfight') {
+  if (s === 'forest' || s === 'boss' || s === 'battle' || s === 'battle2' || s === 'battle3' || s === 'bossfight') {
     joinMoss(); G.flags.forestIntro = true;
     setArea('forest');
     const lx = s === 'boss' ? 31 : 1.2;
@@ -934,6 +1071,7 @@ function debugScene(s) {
     Object.assign(A.moss, { x: A.pip.x - 0.8, z: A.pip.z, dir: 'right' });
   }
   if (s === 'battle') runScript(() => encounter(enemiesOnMap[0]));
+  if (s === 'battle2' || s === 'battle3') { G.flags.tutorialDone = true; const en = enemiesOnMap[s === 'battle2' ? 1 : 2]; Object.assign(A.pip, { x: en.x - 1.2, z: en.z }); runScript(() => encounter(en)); }
   if (s === 'bossfight') { G.flags.gerald = true; Object.assign(A.pip, { x: FOREST.x0 + 36, z: FOREST.z0 }); runScript(bossFight); }
   if (s === 'relight') { joinMoss(); G.flags.gerald = true; A.gerald.visible = false; runScript(relightScene); }
   if (s === 'ending') { joinMoss(); G.lanternK = 1; G.lit = true; for (const n of npcs) { const sp = SPOTS[n.id]; if (sp) { n.actor.x = sp[0]; n.actor.z = sp[1]; n.wander = 0; } } Object.assign(A.pip, { x: 0, z: 2.3, dir: 'up' }); Object.assign(A.moss, { x: 0.95, z: 3.2, dir: 'up' }); Object.assign(A.gerald, { x: -4.3, z: -14.0, lift: 6.55, ground: groundY }); A.gerald.mat.emissiveIntensity = 0.12; G.mode = 'ending'; G.endingT = 0; heroCam(true); }
@@ -965,7 +1103,7 @@ window.LK = {
       party: b.active.map(p => ({ id: p.id, hp: p.hp, sp: p.sp })) };
   },
   battle: () => G.battle,
-  flags: G.flags, party, inventory, stats: G.stats, enemiesOnMap, npcs, G, A, FOREST,
+  ctx: () => ctx, fgTrees, menuActions, flags: G.flags, party, inventory, stats: G.stats, enemiesOnMap, npcs, G, A, FOREST, CAMS, camState, snapCam: () => snapCamToPlayer(),
   // walkability grid dump for automated path-finding tests
   grid(area, x0, z0, x1, z1, step) {
     const out = [], g = groundOf(area);

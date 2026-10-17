@@ -6,6 +6,7 @@
 //  5. bloom (13-tap down / tent up mip chain)
 //  6. final: exposure, filmic tonemap, grade, chromatic aberration, vignette, grain -> sRGB
 import * as THREE from 'three';
+import { carryHaze, stageU } from './lighting.js';
 
 const VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
@@ -186,7 +187,7 @@ void main(){
 }`;
 
 const FINAL_FS = `
-uniform sampler2D tHDR, tBloom; uniform float uExposure, uBloom, uTime, uCA, uVignette; uniform vec2 uRes; varying vec2 vUv;
+uniform sampler2D tHDR, tBloom; uniform float uExposure, uBloom, uTime, uCA, uVignette, uContrast; uniform vec2 uRes; varying vec2 vUv;
 vec3 aces(vec3 x){ const float a=2.51, b=0.03, c=2.43, d=0.59, e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0); }
 vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c)); }
 float h12(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233)) + uTime) * 43758.5453); }
@@ -207,9 +208,9 @@ void main(){
   float warmM = smoothstep(0.15, 0.8, warmth);
   // night grade, pre-tonemap: moonlit shadows / mids -> saturated blue-teal, warm pools untouched
   float shadowM = smoothstep(0.35, 0.0, lum) * (1.0 - 0.85 * warmM);
-  col = mix(col, lum * vec3(0.28, 0.95, 1.85), shadowM * 0.45);
-  // lifted blue floor: the deepest shadows stay readable navy, never crushed black-green
-  col += vec3(0.0035, 0.0085, 0.022) * (1.0 - smoothstep(0.0, 0.08, lum));
+  col = mix(col, lum * vec3(0.26, 0.92, 1.9), shadowM * 0.5);
+  // a deep blue floor (not black, not lifted grey-navy): Octopath's night blacks sit near RGB(4,8,18)
+  col += vec3(0.0008, 0.0018, 0.0052) * (1.0 - smoothstep(0.0, 0.05, lum));
   // tonemap: ACES blended with a hue-preserving luminance curve so hot glass stays orange-gold
   // with a white core only at the very centre, instead of clipping to a flat white-yellow slab
   vec3 ta = aces(col);
@@ -219,18 +220,24 @@ void main(){
   col = mix(ta, th, 0.45 * smoothstep(0.1, 0.9, tl));
   // split tone: cool shadows, warm highlights
   float l2 = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  col *= mix(vec3(0.84, 1.0, 1.12), vec3(1.0), smoothstep(0.02, 0.35, l2) * (0.4 + 0.6 * warmM));
-  col *= mix(vec3(1.0), vec3(1.07, 1.0, 0.9), smoothstep(0.35, 0.85, l2) * warmM);
+  col *= mix(vec3(0.82, 0.98, 1.14), vec3(1.0), smoothstep(0.02, 0.35, l2) * (0.4 + 0.6 * warmM));
+  col *= mix(vec3(1.0), vec3(1.08, 1.0, 0.86), smoothstep(0.3, 0.8, l2) * warmM);
   // saturation: strongest in the mids
   l2 = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  float satK = 1.0 + 0.32 * smoothstep(0.0, 0.12, l2) * (1.0 - smoothstep(0.55, 0.95, l2));
+  float satK = 1.0 + 0.36 * smoothstep(0.0, 0.12, l2) * (1.0 - smoothstep(0.55, 0.95, l2));
   col = mix(vec3(l2), col, satK);
   col = clamp(col, 0.0, 1.0);
-  // gentle contrast S around the mids
-  col = col * col * (3.0 - 2.0 * col) * 0.25 + col * 0.75;
-  // vignette falls to deep blue, not black
-  float v = smoothstep(0.9, 0.25, length(cc * vec2(1.0, 0.8)) * 1.1);
-  col *= mix(vec3(1.0) - uVignette * vec3(1.0, 0.9, 0.7), vec3(1.0), v);
+  // contrast: a toe that pushes the darkest quarter down toward deep blue while the moonlit mids
+  // and the warm pools keep their level, so the frame spans a real range instead of one navy band
+  vec3 toe = col * col / (col + 0.045) * 1.045;
+  col = mix(col, toe, uContrast);
+  col = col * col * (3.0 - 2.0 * col) * 0.32 + col * 0.68;
+  // vignette: the frame edges fall to deep blue-black (Octopath's tilt-shift diorama framing)
+  float vr = length(cc * vec2(1.0, 0.82)) * 1.1;
+  float v = smoothstep(0.92, 0.22, vr);
+  col *= mix(vec3(1.0) - uVignette * vec3(1.0, 0.88, 0.62), vec3(1.0), v);
+  // the foreground ledge melts into the frame edge on a soft ramp instead of ending in a hard band
+  col *= mix(vec3(0.62, 0.7, 0.84), vec3(1.0), smoothstep(0.0, 0.14, vUv.y));
   col = clamp(col, 0.0, 1.0);
   col = toSRGB(col);
   col += (h12(vUv * uRes) - 0.5) * 0.016;
@@ -270,8 +277,8 @@ export class Pipeline {
     this.bDown = mk(BLOOM_DOWN_FS, { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uThreshold: { value: 1.4 }, uFirst: { value: 0 } });
     this.bUp = mk(BLOOM_UP_FS, { tSmall: { value: null }, tBase: { value: null }, uTexel: { value: new THREE.Vector2() }, uScatter: { value: 0.85 } });
     this.final = mk(FINAL_FS, {
-      tHDR: { value: null }, tBloom: { value: null }, uExposure: { value: 1.12 }, uBloom: { value: 0.1 }, uTime: { value: 0 },
-      uCA: { value: 0.006 }, uVignette: { value: 0.4 }, uRes: { value: new THREE.Vector2() },
+      tHDR: { value: null }, tBloom: { value: null }, uExposure: { value: 1.22 }, uBloom: { value: 0.1 }, uTime: { value: 0 },
+      uCA: { value: 0.006 }, uVignette: { value: 0.55 }, uContrast: { value: 1.0 }, uRes: { value: new THREE.Vector2() },
     });
     this.targets = [];
   }
@@ -329,13 +336,18 @@ export class Pipeline {
     P.uProjInv.value.copy(camera.projectionMatrixInverse);
     P.uViewInv.value.copy(camera.matrixWorld);
     P.uCamPos.value.copy(camera.position);
+    // carried lights (Pip's hand lantern) first, then the area's own lights
     const hl = ctx.hazeLights || [];
-    P.uHazeCount.value = Math.min(hl.length, MAX_HAZE);
-    for (let i = 0; i < P.uHazeCount.value; i++) {
-      const fl = 1 + 0.05 * Math.sin(t * 6.3 + i * 1.7);
-      P.uHazePos.value[i].set(hl[i].pos.x, hl[i].pos.y, hl[i].pos.z, hl[i].strength * fl);
-      P.uHazeCol.value[i].set(hl[i].color.r, hl[i].color.g, hl[i].color.b);
+    let nh = 0;
+    for (let j = 0; j < carryHaze.length + hl.length && nh < MAX_HAZE; j++) {
+      const h = j < carryHaze.length ? carryHaze[j] : hl[j - carryHaze.length];
+      if (!(h.strength > 1e-3)) continue;
+      const fl = 1 + 0.05 * Math.sin(t * 6.3 + nh * 1.7);
+      P.uHazePos.value[nh].set(h.pos.x, h.pos.y, h.pos.z, h.strength * fl);
+      P.uHazeCol.value[nh].set(h.color.r, h.color.g, h.color.b);
+      nh++;
     }
+    P.uHazeCount.value = nh;
     this.pass(this.prep, this.rtPrep);
     // 3. DOF
     this.down.uniforms.tSrc.value = this.rtPrep.texture;
@@ -381,6 +393,7 @@ export class Pipeline {
     F.tHDR.value = this.rtComp.texture;
     F.tBloom.value = small.texture;
     F.uTime.value = t % 10;
+    F.uVignette.value = 0.55 + 0.25 * stageU.value;
     F.uRes.value.set(this.w, this.h);
     this.pass(this.final, null);
   }

@@ -3,7 +3,7 @@
 //  - the still showcase (?view=full|house|lantern|characters|terrain|tree, used by shoot.mjs)
 // Sets window.__ready once the first frames have rendered.
 import * as THREE from 'three';
-import { quality, view, viewName, cameraPose, fixedTime, SHOT_TIME } from './config.js';
+import { quality, view, viewName, cameraPose, fixedTime, SHOT_TIME, QUALITY_PRESETS } from './config.js';
 import { HOUSES } from './layout.js';
 import { loadAll } from './assets.js';
 import { buildTerrain } from './terrain.js';
@@ -20,7 +20,8 @@ import { buildForest, buildFireflies } from './forest.js';
 import { bakeCollision, setLanternLevel } from './game_world.js';
 import * as GAME from './game.js';
 import { G } from './game_state.js';
-import { menuActions } from './game_ui.js';
+import { menuActions, clearPressed } from './game_ui.js';
+import { toast } from './game_state.js';
 
 window.__ready = false;
 const params = new URLSearchParams(location.search);
@@ -116,32 +117,62 @@ async function play() {
   };
 
   const post = new Pipeline(renderer, quality);
-  const SCALES = { low: 0.6, med: 0.85, high: 1.0 };
-  let resScale = quality.renderScale;
+  let preset = quality;
   const resize = () => {
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w, h);
     camera.aspect = w / h; camera.updateProjectionMatrix();
     const pr = renderer.getPixelRatio();
-    post.setSize(Math.round(w * pr * resScale), Math.round(h * pr * resScale));
+    post.setSize(Math.round(w * pr * preset.renderScale), Math.round(h * pr * preset.renderScale));
   };
   resize();
   window.addEventListener('resize', resize);
-  // pause-menu "Graphics" cycles the render resolution (DOF / shadow settings stay as loaded)
+  // Graphics presets switch for real at runtime: render scale, MSAA, bloom chain, DOF radius and the
+  // moonlight shadow-map size (lights, tufts and particle counts stay as built at load).
   const order = ['low', 'med', 'high'];
   let qi = order.indexOf(quality.name);
-  menuActions.qualityName = () => ['Low', 'Medium', 'High'][qi];
-  menuActions.quality = () => { qi = (qi + 1) % 3; resScale = SCALES[order[qi]]; resize(); };
+  const applyPreset = (name) => {
+    preset = QUALITY_PRESETS[name];
+    qi = order.indexOf(name);
+    post.q = preset;
+    post.gather.uniforms.uRadScale.value = preset.dofRadScale;
+    scene.traverse(o => {
+      if (o.isDirectionalLight && o.castShadow && o.shadow.mapSize.x !== preset.shadowSize) {
+        o.shadow.mapSize.set(preset.shadowSize, preset.shadowSize);
+        if (o.shadow.map) { o.shadow.map.dispose(); o.shadow.map = null; }
+      }
+    });
+    resize();
+  };
+  menuActions.qualityName = () => ['Low', 'Medium', 'High'][qi] + (autoQ.on ? ' (auto)' : '');
+  menuActions.quality = () => { autoQ.on = false; applyPreset(order[(qi + 1) % 3]); };
+  // automatic step-down: if frames stay slow for a few seconds, drop one preset (never steps up;
+  // disabled when ?quality= is given or once the player picks a preset)
+  const autoQ = { on: !params.has('quality'), acc: 0, n: 0, cool: 4 };
+  const autoQuality = (ms) => {
+    if (!autoQ.on || qi <= 0 || document.hidden) return;
+    autoQ.cool -= ms / 1000;
+    if (autoQ.cool > 0) return;
+    autoQ.acc += ms; autoQ.n++;
+    if (autoQ.acc < 3000) return;
+    const avg = autoQ.acc / autoQ.n;
+    autoQ.acc = 0; autoQ.n = 0;
+    if (avg > 40) { applyPreset(order[qi - 1]); autoQ.cool = 5; toast('Graphics set to ' + ['Low', 'Medium', 'High'][qi] + ' for a smoother frame rate', '#c4b8de'); }
+  };
 
   GAME.startGame();
   let last = performance.now(), frames = 0;
   const t0 = last;
   const frame = (now) => {
-    let dt = Math.min(DTMAX, Math.max(0, (now - last) / 1000));
+    const rawMs = now - last;
+    let dt = Math.min(DTMAX, Math.max(0, rawMs / 1000));
     last = now;
     try {
-      // fixed sub-steps keep collision and scripts stable when a frame is long
-      while (dt > 1e-4) { const s = Math.min(0.05, dt); GAME.update(s); dt -= s; }
+      if (frames > 30 && rawMs < 2000) autoQuality(rawMs);
+      // fixed sub-steps keep collision and scripts stable when a frame is long; one-shot presses
+      // (menu / choice / battle cursor moves, confirms) are consumed by the first sub-step only
+      let first = true;
+      while (dt > 1e-4) { const s = Math.min(0.05, dt); GAME.update(s); dt -= s; if (first) { clearPressed(); first = false; } }
       const t = SHOT_TIME + (now - t0) / 1000;
       updateLighting(ctx, t);
       sky.update(t);
