@@ -15,7 +15,7 @@ import { GREAT_LANTERN_LIGHT } from './layout.js';
 import { radialTex, makeSprite } from './assets.js';
 import { FOREST, forestGround, pathZ, forestLights } from './forest.js';
 import {
-  DYN, GATE, moveActor, blocked as blockedStatic, groundOf, setLanternLevel, lanternLevelImpl, makeProbe, applyArea, camState, CAMS, clampCam, placeCamera,
+  DYN, GATE, routeField, routeAhead, moveActor, blocked as blockedStatic, groundOf, setLanternLevel, lanternLevelImpl, makeProbe, applyArea, camState, CAMS, clampCam, placeCamera,
 } from './game_world.js';
 import { initBattle, startBattle, updateBattle, drawBattle, STAGE_POOLS } from './game_battle.js';
 
@@ -38,6 +38,7 @@ const rings = [];
 let ember = null, gateAnim = 0, pipPool = null, forestFx = null;
 let lampOrder = [];
 const fgTrees = [];
+const TRAIL_STEP = 0.05, FOLLOW_N = 17;     // Moss walks 0.85 m behind Pip along his path
 
 export const CHAR_SCALE = 1.6;      // matches characters.js SCALE (42 texels/m character art)
 const H = (k) => 0.95 * k * CHAR_SCALE;
@@ -54,7 +55,7 @@ const NPC_DEFS = [
   { id: 'fenwick', name: 'Mr. Fenwick', x: 4.75, z: -5.45, four: 'fenwick', h: 1.07 * LO, dir: 'down' },
   { id: 'tobin', name: 'Tobin', x: -3.2, z: 3.55, sprite: 'kid', h: H(1.0), wander: 0.7 },
   { id: 'glen', name: 'Fisherman Glen', x: -5.3, z: 3.25, four: 'glen', h: 1.07 * LO, dir: 'up' },
-  { id: 'barnaby', name: 'Guard Barnaby', x: 19.35, z: 0.6, sprite: 'guard', h: H(1.22) },
+  { id: 'barnaby', name: 'Guard Barnaby', x: 19.3, z: -1.85, sprite: 'guard', h: H(1.22) },
   { id: 'wendell', name: 'Guard Wendell', x: -3.9, z: -12.4, sprite: 'guard', h: H(1.22), flip: true },
   { id: 'biscuit', name: 'Biscuit', x: 1.6, z: -5.6, anim: { right: ['dog_0', 'dog_1'], down: ['dog_0', 'dog_1'], up: ['dog_0', 'dog_1'] }, h: 0.64 * LO, dog: true, wander: 1.6, flip: true },
   { id: 'cat', name: 'The Cat', x: -10.0, z: 1.05, anim: { idle: ['cat_0', 'cat_1'], loop: true }, h: 0.62 * LO, cat: true, fps: 1.2 },
@@ -402,8 +403,9 @@ function findInteract() {
   let best = null, bd = 1e9;
   for (const n of npcs) {
     if (!n.actor.visible || n.joined || !TALK[n.id] || (G.area !== 'town')) continue;
-    const r = n.lying ? 1.5 : 1.0, d = Math.hypot(px - n.actor.x, pz - n.actor.z);
-    if (d < r && d < bd) { best = { n }; bd = d; }
+    // people win over signs / props when both are in reach
+    const r = n.lying ? 1.5 : 1.0, d = Math.hypot(px - n.actor.x, pz - n.actor.z) - 0.35;
+    if (d < r - 0.35 && d < bd) { best = { n }; bd = d; }
   }
   for (const c of CHECKS) {
     if (c.area !== G.area || (c.when && !c.when())) continue;
@@ -459,11 +461,25 @@ function updateField(dt) {
   }
   P.update(dt, run ? 1.6 : 1);
   // follower trail
+  // points are laid every TRAIL_STEP metres of Pip's path (a long sub-step is subdivided), so the
+  // follower stays a fixed distance behind at any frame rate or running speed
   const last = trail[trail.length - 1];
-  if (!last || Math.hypot(last.x - P.x, last.z - P.z) >= 0.05) { trail.push({ x: P.x, z: P.z, dir: P.dir }); if (trail.length > 60) trail.shift(); }
+  if (!last) trail.push({ x: P.x, z: P.z, dir: P.dir });
+  else {
+    let d = Math.hypot(P.x - last.x, P.z - last.z);
+    if (d > 3) { trail.length = 0; trail.push({ x: P.x, z: P.z, dir: P.dir }); d = 0; }
+    let lx = last.x, lz = last.z;
+    while (d >= TRAIL_STEP) {
+      const k = TRAIL_STEP / d;
+      lx += (P.x - lx) * k; lz += (P.z - lz) * k;
+      trail.push({ x: lx, z: lz, dir: P.dir });
+      d -= TRAIL_STEP;
+    }
+    if (trail.length > 80) trail.splice(0, trail.length - 80);
+  }
   const M = A.moss;
   if (follower.active) {
-    const idx = trail.length - 1 - 20;
+    const idx = trail.length - 1 - FOLLOW_N;
     if (idx >= 0) {
       const p = trail[idx];
       const mv = Math.hypot(M.x - p.x, M.z - p.z) > 0.01;
@@ -531,9 +547,18 @@ function updateField(dt) {
     const c = fieldCam();
     const [lx, lz] = P.moving ? DIRV[P.dir] : [0, 0];
     // look ahead along the walk (further when heading east toward the gate / along the forest path)
-    const [tx, tz] = clampCam(G.area, P.x + lx * (lx > 0 ? 2.2 : 1.4), P.z - c.ahead + lz * 0.5);
-    camState.tx = tx; camState.tz = tz; camState.ty = P.ground(P.x, P.z) + c.lift;
-    camState.wantDist = c.dist; camState.wantPitch = c.pitch; camState.wantYaw = c.yaw; camState.fov = c.fov;
+    let [tx, tz] = clampCam(G.area, P.x + lx * (lx > 0 ? 2.2 : 1.4), P.z - c.ahead + lz * 0.5);
+    // approaching the clearing: the shot leans toward Gerald so the whole moth is in frame
+    if (G.area === 'forest' && A.gerald.visible && !gerald.fly) {
+      const k = smooth(Math.max(0, Math.min(1, (P.x - (FOREST.x0 + 25)) / 6)));
+      tx += ((P.x + gerald.home.x) / 2 - tx) * k * 0.85;
+      tz += ((P.z + gerald.home.z) / 2 - 0.2 - tz) * k * 0.6;
+    }
+    // in conversation the shot eases in a little and lifts the speakers clear of the dialogue box
+    const talk = (G.dlg || G.choiceBox) && G.mode === 'field' ? 1 : 0;
+    G.talkCam = (G.talkCam || 0) + (talk - (G.talkCam || 0)) * Math.min(1, dt * 3);
+    camState.tx = tx; camState.tz = tz; camState.ty = P.ground(P.x, P.z) + c.lift - 1.45 * G.talkCam;
+    camState.wantDist = c.dist * (1 - 0.12 * G.talkCam); camState.wantPitch = c.pitch; camState.wantYaw = c.yaw; camState.fov = c.fov;
     camState.range = c.range; camState.aperture = c.aperture;
     camState.focusOverride = null;
   }
@@ -580,12 +605,16 @@ async function encounter(en) {
   await fadeTo(1, 0.25, '#ffffff');
   en.actor.visible = false;
   const saved = { px: A.pip.x, pz: A.pip.z, mx: A.moss.x, mz: A.moss.z, dir: A.pip.dir };
+  // nothing else from the field map may stand on (or behind) the battle stage and read as a 3rd foe
+  const hidden = [...enemiesOnMap.filter(o => o !== en && o.alive && o.actor.visible).map(o => o.actor), ...(A.gerald.visible ? [A.gerald] : [])];
+  for (const a of hidden) a.visible = false;
   const cx = (A.pip.x + en.x) / 2 + 0.6, cz = FOREST.z0 + pathZ(cx - FOREST.x0) - 0.2;
   const p = startBattle(en.battle, { tutorial: en.tutorial && !G.flags.tutorialDone, drop: en.drop, cx, cz });
   G.fade.a = 0; G.fade.target = 0;
   const r = await p;
   if (en.tutorial) G.flags.tutorialDone = true;
   await fadeTo(1, 0.35);
+  for (const a of hidden) a.visible = true;
   G.battle = null;
   G.mode = 'field';
   audio.play('forest');
@@ -609,7 +638,11 @@ async function encounter(en) {
     await narrate('Pip woke up at the forest edge. Moss is pretending not to have been worried.');
     await say('Moss', 'I wasn\'t worried. My eyes are just sweaty.');
   }
-  if (r === 'win') for (const m of party) if (m.joined) m.hp = Math.max(m.hp, Math.round(m.maxHp * 0.5));
+  if (r === 'win') {
+    let sp = 0;
+    for (const m of party) if (m.joined) { m.hp = Math.max(m.hp, Math.round(m.maxHp * 0.5)); const s0 = m.sp; m.sp = Math.max(m.sp, Math.round(m.maxSp * 0.5)); sp += m.sp - s0; }
+    if (sp > 0) toast('A short breather: SP partly restored', '#7ac8ff');
+  }
 }
 
 // ---------------- story beats ----------------
@@ -648,8 +681,16 @@ async function geraldScene() {
   G.cineTarget = 1;
   audio.stopMusic();
   A.pip.moving = false;
-  shotCam(FOREST.x0 + FOREST.clearX - 1.0, 2.0, FOREST.z0 + FOREST.clearZ, 16, 13, 4);
-  await wait(1.3);
+  // a two-shot: the party on the left, Gerald filling the right, both above the dialogue box
+  {
+    const gx = gerald.home.x, gz = gerald.home.z;
+    const px = Math.min(A.pip.x + 1.6, gx - 4.6);
+    const midX = (px + gx) / 2 - 0.3, midZ = (A.pip.z + gz) / 2 + 0.4;
+    shotCam(midX, forestGround(midX, midZ) + 1.2, midZ, 19.5, 8.5, 3);
+    await walkPlayer(px, A.pip.z);
+    A.pip.dir = 'right';
+  }
+  await wait(0.9);
   await say('???', 'Mmm... so warm... so shiny...');
   await say('Moss', 'Oh no.');
   await say('Moss', 'It\'s a moth. A really, REALLY big moth.');
@@ -684,7 +725,7 @@ async function bossFight() {
     Object.assign(A.pip, { x: cx + 2.4, z: cz - 0.2, dir: 'left' });
     Object.assign(A.moss, { x: cx + 3.2, z: cz + 0.5, dir: 'left' });
     trail.length = 0;
-    shotCam(cx + 0.6, 1.9, cz, 15, 13, 4);
+    shotCam(cx + 0.9, forestGround(cx, cz) + 1.2, cz, 19, 8.5, 3);
     await fadeTo(0, 0.5);
     if (r === 'win') break;
     for (const m of party) if (m.joined) { m.hp = m.maxHp; m.sp = m.maxSp; }
@@ -938,6 +979,20 @@ export function update(dt) {
     }
     setTree(f, show);
   }
+  // anyone standing in front of Pip and over him on screen turns to a dithered see-through
+  {
+    const k = Math.min(1, dt * 8), field = G.mode === 'field';
+    const fadeOf = (a, n) => {
+      let want = 0;
+      if (field && a.visible && !(n && n.lying) && a.z > P.z + 0.05 && a.z - P.z < 3.2 && Math.abs(a.x - P.x) < 0.5 * (a.w + A.pip.w) * 0.8) want = 0.55;
+      a.U.uFade.value += (want - a.U.uFade.value) * k;
+      if (want === 0 && a.U.uFade.value < 0.02) a.U.uFade.value = 0;
+    };
+    if (G.mode !== 'battle') {
+      for (const n of npcs) if (!n.joined) fadeOf(n.actor, n);
+      fadeOf(A.moss, null);
+    }
+  }
   // player locator ring
   const R = A.ring;
   let ra = null;
@@ -953,16 +1008,34 @@ export function update(dt) {
   }
 }
 
-// focus distance for the DOF: the player in the field, the stage in battle, fixed for hero shots
+// focus for the DOF: Pip in the field, the acting character in battle (range = the cast's depth
+// spread), the shot's look-at in cutscenes, fixed for hero shots. Also published as ctx.focusDist /
+// ctx.focusRange (metres) for post.js.
+const _f = new THREE.Vector3();
+const forestHaze = { hazeLights: null };
 export function focusInfo() {
-  if (camState.focusOverride) return { focus: camState.focusOverride, range: camState.range, aperture: camState.aperture };
-  if (G.mode === 'battle' && G.battle) { _p.set(G.battle.cx, camState.y, G.battle.cz); }
-  else if (camState.lock) _p.set(camState.x, camState.y, camState.z);
-  else { A.pip.anchor(_p, 0.5); }
-  return { focus: camera.position.distanceTo(_p), range: camState.range, aperture: camState.aperture };
+  let focus, range = camState.range;
+  if (camState.focusOverride) focus = camState.focusOverride;
+  else if (G.mode === 'battle' && G.battle) {
+    const b = G.battle;
+    const cast = [...b.active.map(p => p.actor), ...b.enemies.filter(e => e.alive && e.actor).map(e => e.actor)];
+    let lo = 1e9, hi = -1e9;
+    for (const a of cast) { a.anchor(_f, 0.5); const d = camera.position.distanceTo(_f); lo = Math.min(lo, d); hi = Math.max(hi, d); }
+    const who = b.actor && b.actor.actor ? b.actor.actor : (b.order && b.order[b.orderIdx] && b.order[b.orderIdx].actor) || null;
+    if (who) { who.anchor(_f, 0.5); focus = camera.position.distanceTo(_f); }
+    else focus = (lo + hi) / 2;
+    range = Math.max(1.6, Math.max(hi - focus, focus - lo) + 0.6);
+  } else if (camState.lock) { _f.set(camState.x, camState.y, camState.z); focus = camera.position.distanceTo(_f); }
+  else {
+    A.pip.anchor(_f, 0.5); focus = camera.position.distanceTo(_f);
+    if (follower.active && A.moss.visible) { A.moss.anchor(_f, 0.5); range = Math.max(range, Math.abs(camera.position.distanceTo(_f) - focus) + 0.8); }
+  }
+  ctx.focusDist = forestHaze.focusDist = focus;
+  ctx.focusRange = forestHaze.focusRange = range;
+  return { focus, range, aperture: camState.aperture };
 }
 
-export function hazeCtx() { return G.area === 'forest' ? { hazeLights: forestFx.haze } : ctx; }
+export function hazeCtx() { if (G.area !== 'forest') return ctx; forestHaze.hazeLights = forestFx.haze; return forestHaze; }
 
 export function drawOverlay() {
   clearHits();
@@ -1005,42 +1078,55 @@ export function drawOverlay() {
 }
 
 // ---------------- where to go next ----------------
-// The current goal (the next person to talk to, or the open gate) gets a bobbing gold marker over it;
-// when it is off-screen a gold arrow at the screen edge points the way.
-function goalPos() {
+// The current goal (the next person to talk to, or the open gate) gets a small bobbing gold marker
+// just over its head. When it is off-screen, a gold chevron beside Pip points along the walkable
+// route to it (a distance field over the walk grid), so it never points through a wall or a stall.
+function goalSpot() {
   if (G.area !== 'town' || !G.flags.intro || G.flags.gerald) return null;
-  const at = (id) => { const a = npc(id).actor; a.anchor(_g, 1.12); return _g; };
-  if (!G.flags.mayor) return at('mayor');
-  if (!G.flags.moss) return at('moss');
-  if (!GATE.open) return at('barnaby');
-  return _g.set(GATE.x + 0.6, groundY(GATE.x, -0.15) + 1.6, -0.15);
+  if (!G.flags.mayor) return { id: 'mayor', a: npc('mayor').actor };
+  if (!G.flags.moss) return { id: 'moss', a: npc('moss').actor };
+  if (!GATE.open) return { id: 'barnaby', a: npc('barnaby').actor };
+  return { id: 'gate', x: GATE.x + 0.6, z: -0.15 };
 }
 const _g = new THREE.Vector3();
+let route = null;
 function drawGoal() {
-  const g = goalPos();
-  if (!g) return;
-  const u = V.S, s = toScreenV(g.x, g.y, g.z);
-  const m = 22 * u;
+  const gs = goalSpot();
+  if (!gs) return;
+  const gx = gs.a ? gs.a.x : gs.x, gz = gs.a ? gs.a.z : gs.z;
+  const key = gs.id + (GATE.open ? 1 : 0);
+  if (!route || route.key !== key) { route = routeField(gx, gz); route.key = key; }
+  if (gs.a) gs.a.anchor(_g, 1.0); else _g.set(gx, groundY(gx, gz) + 1.3, gz);
+  const u = V.S, s = toScreenV(_g.x, _g.y, _g.z);
+  const m = 14 * u;
   const on = s[2] < 1 && s[0] > m && s[0] < V.W - m && s[1] > m && s[1] < V.H - m;
   const t = G.target && G.target.n && G.target.n.actor;
   D.save();
   if (on) {
-    if (t && Math.abs(toScreen(t, 1.12)[0] - s[0]) < 2) { D.restore(); return; }   // the talk bubble is already there
-    const y = s[1] - 4 * u + Math.sin(G.t * 4) * 2 * u;
+    if (t && t === gs.a) { D.restore(); return; }   // the talk bubble is already there
+    const y = s[1] - 3 * u + Math.sin(G.t * 4) * 1.5 * u;
     D.fillStyle = 'rgba(20,10,30,0.6)';
-    D.beginPath(); D.moveTo(s[0] - 6 * u, y - 7 * u + u); D.lineTo(s[0] + 6 * u, y - 7 * u + u); D.lineTo(s[0], y + u * 1.5); D.fill();
+    D.beginPath(); D.moveTo(s[0] - 5 * u, y - 6 * u + u); D.lineTo(s[0] + 5 * u, y - 6 * u + u); D.lineTo(s[0], y + u * 1.5); D.fill();
     D.fillStyle = '#ffd75a';
-    D.beginPath(); D.moveTo(s[0] - 5 * u, y - 7 * u); D.lineTo(s[0] + 5 * u, y - 7 * u); D.lineTo(s[0], y); D.fill();
-  } else {
-    // edge arrow toward the goal (behind the camera: flip so it still points the right way)
-    let dx = s[0] - V.W / 2, dy = s[1] - V.H / 2;
-    if (s[2] > 1) { dx = -dx; dy = -dy; }
-    const k = Math.min((V.W / 2 - m) / Math.max(1e-3, Math.abs(dx)), (V.H / 2 - m) / Math.max(1e-3, Math.abs(dy)));
-    const x = V.W / 2 + dx * k, y = V.H / 2 + dy * k, a = Math.atan2(dy, dx);
-    D.translate(x, y); D.rotate(a);
-    D.globalAlpha = 0.75 + 0.25 * Math.sin(G.t * 5);
-    D.fillStyle = 'rgba(20,10,30,0.6)'; D.beginPath(); D.arc(0, 0, 9 * u, 0, TAU); D.fill();
-    D.fillStyle = '#ffd75a'; D.beginPath(); D.moveTo(6 * u, 0); D.lineTo(-3 * u, -5 * u); D.lineTo(-3 * u, 5 * u); D.fill();
+    D.beginPath(); D.moveTo(s[0] - 4 * u, y - 6 * u); D.lineTo(s[0] + 4 * u, y - 6 * u); D.lineTo(s[0], y); D.fill();
+  }
+  if (!on || Math.hypot(A.pip.x - gx, A.pip.z - gz) > 7) {
+    // a chevron orbiting Pip's feet, pointing the way along the route ~2.5 m ahead
+    const P = A.pip;
+    if (Math.hypot(P.x - gx, P.z - gz) < 1.6) { D.restore(); return; }
+    const w = routeAhead(route, P.x, P.z, 2.5);
+    if (w) {
+      const gy = P.ground(P.x, P.z) + 0.05;
+      const a0 = toScreenV(P.x, gy, P.z), a1 = toScreenV(w[0], groundY(w[0], w[1]) + 0.05, w[1]);
+      const dx = a1[0] - a0[0], dy = a1[1] - a0[1], dl = Math.hypot(dx, dy) || 1;
+      const ux = dx / dl, uy = dy / dl;
+      const r = 22 * u + Math.sin(G.t * 5) * 1.5 * u;
+      const x = a0[0] + ux * r, y = a0[1] + uy * r * 0.8 - 2 * u, a = Math.atan2(uy * 0.8, ux);
+      D.translate(x, y); D.rotate(a);
+      D.globalAlpha = 0.85;
+      D.fillStyle = 'rgba(20,10,30,0.55)'; D.beginPath(); D.moveTo(7.5 * u, 0.8 * u); D.lineTo(-3.5 * u, -5 * u); D.lineTo(-1 * u, 0.8 * u); D.lineTo(-3.5 * u, 6.6 * u); D.fill();
+      D.fillStyle = '#ffd75a'; D.beginPath(); D.moveTo(6.5 * u, 0); D.lineTo(-3.5 * u, -5.5 * u); D.lineTo(-1 * u, 0); D.lineTo(-3.5 * u, 5.5 * u); D.fill();
+    }
   }
   D.restore();
 }
@@ -1070,6 +1156,8 @@ function debugScene(s) {
     Object.assign(A.pip, { x: FOREST.x0 + lx, z: FOREST.z0 + pathZ(lx), dir: 'right' });
     Object.assign(A.moss, { x: A.pip.x - 0.8, z: A.pip.z, dir: 'right' });
   }
+  // ?lv=N: start the party at level N (same growth as a level-up), for testing later fights
+  if (qs.has('lv')) for (const p of party) while (p.lv < +qs.get('lv')) { p.lv++; p.maxHp += 12; p.maxSp += 4; p.atk += 2; p.mag += 2; p.def += 1; p.spd += 1; p.hp = p.maxHp; p.sp = p.maxSp; }
   if (s === 'battle') runScript(() => encounter(enemiesOnMap[0]));
   if (s === 'battle2' || s === 'battle3') { G.flags.tutorialDone = true; const en = enemiesOnMap[s === 'battle2' ? 1 : 2]; Object.assign(A.pip, { x: en.x - 1.2, z: en.z }); runScript(() => encounter(en)); }
   if (s === 'bossfight') { G.flags.gerald = true; Object.assign(A.pip, { x: FOREST.x0 + 36, z: FOREST.z0 }); runScript(bossFight); }
@@ -1110,5 +1198,6 @@ window.LK = {
     for (let z = z0; z <= z1 + 1e-6; z += step) { const row = []; for (let x = x0; x <= x1 + 1e-6; x += step) row.push(blockedStatic(area, x + 0.013, z + 0.013) ? -99 : +g(x + 0.013, z + 0.013).toFixed(2)); out.push(row); }
     return out;
   },
+  routeHint() { const gs = goalSpot(); if (!gs || !route) return null; return { goal: gs.id, w: routeAhead(route, A.pip.x, A.pip.z, 2.5) }; },
   teleport(x, z, area) { if (area && area !== G.area) setArea(area); A.pip.x = x; A.pip.z = z; A.moss.x = x - 0.9; A.moss.z = z; trail.length = 0; snapCamToPlayer(); },
 };

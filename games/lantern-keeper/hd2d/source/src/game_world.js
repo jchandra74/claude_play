@@ -79,6 +79,8 @@ export function bakeCollision() {
   // the bakery frontage (baker, bread table, pots, barrels by the top of the east stairs) as one smooth
   // solid block: walking east along it glides you down onto the stairs, no blind pockets to get stuck in
   markBox(g, 10.0, -4.95, 3.0, 0.72, 0);
+  // the blind pocket between the south-east lamp and Madame Zuzu's stall (you could wedge in there)
+  markBox(g, 4.85, 3.35, 0.5, 0.42, 0);
   for (const c of COLLIDERS) {
     if (c.t === 'c') markCircle(g, c.x, c.z, c.r);
     else if (c.t === 'box') markBox(g, c.x, c.z, c.hw, c.hd, c.rot);
@@ -253,9 +255,12 @@ export function applyArea(ctx, area) {
 const QS = new URLSearchParams(location.search);
 const qn = (k, d) => QS.has(k) ? parseFloat(QS.get(k)) : d;
 export const CAMS = {
-  field: { dist: qn('fdist', 17), pitch: qn('fpitch', 21), yaw: qn('fyaw', 8), fov: qn('ffov', 30), lift: 1.35, ahead: 0.7, range: 2.6, aperture: 22 },
-  forest: { dist: qn('fdist', 16.5), pitch: qn('fpitch', 17), yaw: qn('fyaw', 6), fov: qn('ffov', 30), lift: 1.45, ahead: 0.4, range: 2.6, aperture: 24 },
-  battle: { dist: 14, pitch: 17, yaw: -6, fov: 30, lift: 0.2, range: 2.2, aperture: 40 },
+  // a low, long tilt: the plaza recedes behind Pip, the village climbs to a strip of skyline at the top
+  field: { dist: qn('fdist', 21.5), pitch: qn('fpitch', 10.5), yaw: qn('fyaw', 7), fov: qn('ffov', 30), lift: qn('flift', 2.7), ahead: 0.4, range: 2.6, aperture: 22 },
+  forest: { dist: qn('fdist', 20), pitch: qn('fpitch', 11), yaw: qn('fyaw', 5), fov: qn('ffov', 30), lift: qn('flift', 2.5), ahead: 0.3, range: 2.6, aperture: 24 },
+  // battle: framed from as far out as the field camera, so sprites keep the world's pixel scale; the
+  // stage is a diorama (monsters left, party right) with the forest rising behind
+  battle: { dist: qn('bdist', 18.5), pitch: qn('bpitch', 16), yaw: qn('byaw', -4), fov: 30, lift: qn('blift', 1.0), range: 3.2, aperture: 30 },
 };
 export const camState = { x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: 0, dist: 21, pitch: 9, yaw: 0, wantYaw: 0, fov: 30, focus: 21, range: 2.6, aperture: 20, lock: false, shake: 0 };
 export function clampCam(area, x, z) {
@@ -275,6 +280,72 @@ export function placeCamera(camera, cs, dt, snap = false) {
   _v.set(cs.x + sx, cs.y + sy, cs.z);
   camera.lookAt(_v);
   cs.fovNow = cs.fovNow === undefined ? cs.fov : cs.fovNow + (cs.fov - cs.fovNow) * kk;
-  if (Math.abs(camera.fov - cs.fovNow) > 1e-3) { camera.fov = cs.fovNow; camera.updateProjectionMatrix(); }
+  // very wide screens (phones in landscape) keep a 1.9:1 horizontal field instead of seeing ever
+  // more to the sides, so the cast stays as large as the screen height allows
+  const asp = camera.aspect, fov = asp > 1.9 ? 2 * Math.atan(Math.tan(cs.fovNow * Math.PI / 360) * 1.9 / asp) * 180 / Math.PI : cs.fovNow;
+  if (Math.abs(camera.fov - fov) > 1e-3) { camera.fov = fov; camera.updateProjectionMatrix(); }
   camera.updateMatrixWorld();
+}
+
+// ---------- route finding for the goal marker ----------
+// A breadth-first distance field over the walk grid toward a goal (respecting walls, props and the
+// terrace steps, ie the same rules as moveActor minus the NPCs), and a walker that follows it from
+// any spot: the goal arrow points along the real route, never straight through a wall.
+let townH = null;
+function townHeights() {
+  if (townH) return townH;
+  const g = townGrid;
+  townH = new Float32Array(g.nx * g.nz);
+  for (let j = 0; j < g.nz; j++) for (let i = 0; i < g.nx; i++) townH[j * g.nx + i] = groundY(g.x0 + (i + 0.5) * CELL, g.z0 + (j + 0.5) * CELL);
+  return townH;
+}
+export function routeField(gx, gz) {
+  const g = townGrid, H = townHeights(), n = g.nx * g.nz;
+  const dist = new Int32Array(n).fill(-1), q = new Int32Array(n);
+  const free = (k) => !g.a[k] && !(!GATE.open && Math.abs(g.x0 + (k % g.nx + 0.5) * CELL - GATE.x) < 0.5 && (g.z0 + (Math.floor(k / g.nx) + 0.5) * CELL) > GATE.z0 - 0.3 && (g.z0 + (Math.floor(k / g.nx) + 0.5) * CELL) < GATE.z1 + 0.3);
+  // seed: every free cell within 0.9 m of the goal (the goal itself may stand on a blocked cell)
+  let qh = 0, qt = 0;
+  const gi = Math.floor((gx - g.x0) / CELL), gj = Math.floor((gz - g.z0) / CELL);
+  for (let r = 6; r <= 16 && qt === 0; r += 5) {
+    for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+      const i = gi + di, j = gj + dj;
+      if (i < 0 || j < 0 || i >= g.nx || j >= g.nz || di * di + dj * dj > r * r) continue;
+      const k = j * g.nx + i;
+      if (free(k) && dist[k] < 0) { dist[k] = 0; q[qt++] = k; }
+    }
+  }
+  while (qh < qt) {
+    const k = q[qh++], i = k % g.nx, j = (k - i) / g.nx;
+    for (let d = 0; d < 4; d++) {
+      const ii = i + (d === 0 ? 1 : d === 1 ? -1 : 0), jj = j + (d === 2 ? 1 : d === 3 ? -1 : 0);
+      if (ii < 0 || jj < 0 || ii >= g.nx || jj >= g.nz) continue;
+      const kk = jj * g.nx + ii;
+      if (dist[kk] >= 0 || !free(kk) || Math.abs(H[kk] - H[k]) > 0.3) continue;
+      dist[kk] = dist[k] + 1; q[qt++] = kk;
+    }
+  }
+  return { dist, gx, gz };
+}
+// a point `ahead` metres along the route from (x, z) (or the goal, if nearer); null when unreachable
+export function routeAhead(f, x, z, ahead) {
+  const g = townGrid;
+  let i = Math.floor((x - g.x0) / CELL), j = Math.floor((z - g.z0) / CELL);
+  const at = (i, j) => (i < 0 || j < 0 || i >= g.nx || j >= g.nz) ? -1 : f.dist[j * g.nx + i];
+  if (at(i, j) < 0) {
+    // standing on a blocked cell (pushed against a prop): start from the nearest reachable one
+    let best = null;
+    for (let r = 1; r <= 5 && !best; r++) for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) if (at(i + di, j + dj) >= 0 && (!best || at(i + di, j + dj) < at(best[0], best[1]))) best = [i + di, j + dj];
+    if (!best) return null;
+    [i, j] = best;
+  }
+  const steps = Math.round(ahead / CELL);
+  for (let s = 0; s < steps; s++) {
+    const c = at(i, j);
+    if (c <= 0) return [f.gx, f.gz];
+    let bi = i, bj = j, bc = c;
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) { const v = at(i + di, j + dj); if (v >= 0 && v < bc) { bc = v; bi = i + di; bj = j + dj; } }
+    if (bi === i && bj === j) break;
+    i = bi; j = bj;
+  }
+  return [g.x0 + (i + 0.5) * CELL, g.z0 + (j + 0.5) * CELL];
 }

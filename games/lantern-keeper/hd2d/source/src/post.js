@@ -6,17 +6,33 @@
 //  5. bloom (13-tap down / tent up mip chain)
 //  6. final: exposure, filmic tonemap, grade, chromatic aberration, vignette, grain -> sRGB
 import * as THREE from 'three';
-import { carryHaze, stageU } from './lighting.js';
+import { carryHaze, stageU, lightCtx, moonOffU } from './lighting.js';
+const SHOWCASE = (() => { try { return new URLSearchParams(location.search).has('view'); } catch (e) { return false; } })();
 
 const VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
 const COMMON = `
-uniform float uNear, uFar, uFocus, uRange, uAperture, uMaxCoc, uFarK;
+uniform float uNear, uFar, uFocus, uRange, uAperture, uMaxCoc, uFarK, uGame, uNearSpan, uFarSpan, uFarMax, uNearDZ;
 float viewDepth(float d){ float z = d * 2.0 - 1.0; return (2.0 * uNear * uFar) / (uFar + uNear - z * (uFar - uNear)); }
 float cocOf(float depth){
   float dd = depth - uFocus;
   // smooth focal band: ~0 inside +-range, then grows like a thin lens (|d-f|/d) on both sides
   float f = dd - uRange * tanh(dd / uRange);
+  if (uGame > 0.5) {
+    // gameplay tilt-shift: the follow camera looks down on a shallow set (everything sits within
+    // ~0.6x..2x of the focus distance), where a thin lens barely blurs anything. Octopath's look is a
+    // miniature lens: the blur is a function of RELATIVE depth from the party, opening fast in front
+    // (the foreground strip is fully soft a few metres toward the camera) and steadily behind (houses
+    // and terraces go soft, the skyline fully melts).
+    // a hard-edged dead zone (no tanh leak) keeps everyone standing within a few metres of the party
+    // pixel-sharp; past it the blur eases in quadratically, then grows linearly
+    float dz = dd < 0.0 ? uNearDZ : uRange;
+    float a = max(abs(dd) - dz, 0.0);
+    a = a * a / (a + 0.8);
+    float tn = clamp(a / uNearSpan, 0.0, 1.0);
+    float tf = clamp(a / uFarSpan, 0.0, 1.0);
+    return dd < 0.0 ? -uMaxCoc * tn * (2.0 - tn) : uMaxCoc * uFarMax * tf;
+  }
   // the far field is held back (uFarK): background roofs / timber keep their texel pattern under the
   // tilt-shift instead of melting into slabs; the near field keeps the full aperture
   f *= dd > 0.0 ? mix(uFarK, 1.0, smoothstep(uFocus + 26.0, uFocus + 70.0, depth)) : 1.0;
@@ -36,6 +52,8 @@ uniform int uHazeCount;
 uniform float uHazeDensity;
 uniform vec3 uMistColor;
 uniform float uMist;
+uniform vec4 uAir;      // x,y: haze start / full distance; z: strength; w: foreground veil strength
+uniform vec3 uAirCol;
 varying vec2 vUv;
 void main(){
   vec3 col = texture2D(tColor, vUv).rgb;
@@ -70,12 +88,20 @@ void main(){
   float skyW = isSky > 0.5 ? exp(-max(rd.y, 0.0) * 14.0) : 1.0;   // only a thin luminous band on the horizon
   col += uMistColor * uMist * (mistH * mistH + 0.35) * far * skyW;
   // moonlit air: distant layers recede into luminous blue rather than mud, one step per depth band
-  float air = smoothstep(uFocus + 8.0, uFocus + 70.0, L) * (1.0 - isSky);
-  col = mix(col, col * vec3(0.6, 0.78, 1.05) + uMistColor * 1.2, air * 0.5);
+  float air = smoothstep(uAir.x, uAir.y, L) * (1.0 - isSky);
+  // values compress toward the air colour (blacks lift, highlights sink) so each layer behind the
+  // party sits one step paler and flatter than the one in front of it
+  col = mix(col, col * vec3(0.55, 0.72, 0.95) + uAirCol, air * uAir.z);
+  // the strip between camera and party: a dark, cool veil (Octopath's out-of-focus foreground ledges)
+  float veil = smoothstep(uFocus - uRange, uFocus * 0.55, L) * (1.0 - isSky);
+  col = mix(col, col * vec3(0.5, 0.58, 0.72), veil * uAir.w);
   // the sky is a painted backdrop at infinity: keep the moon's rim and the stars crisp
   // the sky blurs like the ridges down at the ridgeline (so silhouettes melt into it) but stays crisp
   // above it, where the moon's limb, its halo and the stars must read as sharp as Octopath's backdrops
   float coc = isSky > 0.5 ? mix(uMaxCoc * 0.6, 1.4, smoothstep(0.105, 0.14, rd.y)) : cocOf(depth);
+  // gameplay: the strip along the bottom edge that sits in front of the party is always a soft
+  // foreground ledge (the miniature-lens look), even where the set is shallow
+  if (uGame > 0.5 && depth < uFocus - uRange * 1.2) coc = min(coc, -uMaxCoc * 0.85 * smoothstep(0.24, 0.03, vUv.y));
   gl_FragColor = vec4(col, coc);
 }`;
 
@@ -138,13 +164,14 @@ void main(){
 }`;
 
 const COMBINE_FS = `
-uniform sampler2D tSharp, tBlur; varying vec2 vUv;
+uniform sampler2D tSharp, tBlur; uniform vec4 uComb; varying vec2 vUv;
 void main(){
   vec4 s = texture2D(tSharp, vUv);
   vec4 b = texture2D(tBlur, vUv);
   // small far-field CoC stays on the full-res sharp image (the half-res blur would erase 1-px texels);
-  // near-field blur keeps the original quick ramp
-  float a = s.a < 0.0 ? smoothstep(0.6, 2.6, -s.a) : smoothstep(1.8, 5.5, s.a);
+  // near-field blur keeps the original quick ramp. Thresholds scale with the frame's max CoC so the
+  // low preset (a small render target) still crosses into the blurred image.
+  float a = s.a < 0.0 ? smoothstep(uComb.x, uComb.y, -s.a) : smoothstep(uComb.z, uComb.w, s.a);
   a = max(a, b.a);
   gl_FragColor = vec4(mix(s.rgb, b.rgb, a), 1.0);
 }`;
@@ -187,14 +214,16 @@ void main(){
 }`;
 
 const FINAL_FS = `
-uniform sampler2D tHDR, tBloom; uniform float uExposure, uBloom, uTime, uCA, uVignette, uContrast; uniform vec2 uRes; varying vec2 vUv;
+uniform sampler2D tHDR, tBloom; uniform float uExposure, uBloom, uTime, uCA, uVignette, uContrast, uNightK, uWarmK; uniform vec3 uNightTint; uniform vec2 uRes; varying vec2 vUv;
 vec3 aces(vec3 x){ const float a=2.51, b=0.03, c=2.43, d=0.59, e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0); }
 vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c)); }
 float h12(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233)) + uTime) * 43758.5453); }
 void main(){
   vec2 cc = vUv - 0.5;
   float r2 = dot(cc, cc);
+  // lateral CA only toward the corners and capped at ~1 px (it fringed the bright corner lamps)
   vec2 off = cc * r2 * uCA;
+  off = off * min(1.0, 1.0 / max(length(off * uRes), 1e-4));
   vec3 col;
   col.r = texture2D(tHDR, vUv - off).r;
   col.g = texture2D(tHDR, vUv).g;
@@ -208,7 +237,7 @@ void main(){
   float warmM = smoothstep(0.15, 0.8, warmth);
   // night grade, pre-tonemap: moonlit shadows / mids -> saturated blue-teal, warm pools untouched
   float shadowM = smoothstep(0.35, 0.0, lum) * (1.0 - 0.85 * warmM);
-  col = mix(col, lum * vec3(0.26, 0.92, 1.9), shadowM * 0.5);
+  col = mix(col, lum * uNightTint, shadowM * uNightK);
   // a deep blue floor (not black, not lifted grey-navy): Octopath's night blacks sit near RGB(4,8,18)
   col += vec3(0.0008, 0.0018, 0.0052) * (1.0 - smoothstep(0.0, 0.05, lum));
   // tonemap: ACES blended with a hue-preserving luminance curve so hot glass stays orange-gold
@@ -222,6 +251,9 @@ void main(){
   float l2 = dot(col, vec3(0.2126, 0.7152, 0.0722));
   col *= mix(vec3(0.82, 0.98, 1.14), vec3(1.0), smoothstep(0.02, 0.35, l2) * (0.4 + 0.6 * warmM));
   col *= mix(vec3(1.0), vec3(1.08, 1.0, 0.86), smoothstep(0.3, 0.8, l2) * warmM);
+  // warm practicals keep their saturation through the tonemap (lamp pools read as amber, not beige)
+  float l3 = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = mix(vec3(l3), col, 1.0 + uWarmK * warmM * smoothstep(0.04, 0.3, l3) * (1.0 - smoothstep(0.7, 1.0, l3)));
   // saturation: strongest in the mids
   l2 = dot(col, vec3(0.2126, 0.7152, 0.0722));
   float satK = 1.0 + 0.36 * smoothstep(0.0, 0.12, l2) * (1.0 - smoothstep(0.55, 0.95, l2));
@@ -244,6 +276,7 @@ void main(){
   gl_FragColor = vec4(col, 1.0);
 }`;
 
+const _dir = new THREE.Vector3();
 function rt(w, h, opts = {}) {
   return new THREE.WebGLRenderTarget(Math.max(1, w), Math.max(1, h), {
     type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false,
@@ -260,7 +293,7 @@ export class Pipeline {
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
     this.quad.frustumCulled = false;
     this.quadScene.add(this.quad);
-    const common = { uFarK: { value: 0.5 }, uNear: { value: 0.1 }, uFar: { value: 800 }, uFocus: { value: 30 }, uRange: { value: 3 }, uAperture: { value: 60 }, uMaxCoc: { value: 24 } };
+    const common = { uGame: { value: 0 }, uNearDZ: { value: 3 }, uNearSpan: { value: 6 }, uFarSpan: { value: 14 }, uFarMax: { value: 0.8 }, uFarK: { value: 0.5 }, uNear: { value: 0.1 }, uFar: { value: 800 }, uFocus: { value: 30 }, uRange: { value: 3 }, uAperture: { value: 60 }, uMaxCoc: { value: 24 } };
     this.common = common;
     const mk = (fs, uniforms) => new THREE.ShaderMaterial({ vertexShader: VS, fragmentShader: fs, uniforms, depthTest: false, depthWrite: false });
     this.prep = mk(PREP_FS, {
@@ -270,15 +303,17 @@ export class Pipeline {
       uHazeCol: { value: Array.from({ length: MAX_HAZE }, () => new THREE.Vector3()) },
       uHazeCount: { value: 0 }, uHazeDensity: { value: 0.03 },
       uMistColor: { value: new THREE.Vector3(0.012, 0.035, 0.085) }, uMist: { value: 1.0 },
+      uAir: { value: new THREE.Vector4(38, 100, 0.5, 0) }, uAirCol: { value: new THREE.Vector3(0.0144, 0.042, 0.102) },
     });
     this.down = mk(DOWN_FS, { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() } });
     this.gather = mk(GATHER_FS, { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uMaxR: { value: 12 }, uRadScale: { value: quality.dofRadScale } });
-    this.combine = mk(COMBINE_FS, { tSharp: { value: null }, tBlur: { value: null } });
+    this.combine = mk(COMBINE_FS, { tSharp: { value: null }, tBlur: { value: null }, uComb: { value: new THREE.Vector4(0.6, 2.6, 1.8, 5.5) } });
     this.bDown = mk(BLOOM_DOWN_FS, { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uThreshold: { value: 1.4 }, uFirst: { value: 0 } });
     this.bUp = mk(BLOOM_UP_FS, { tSmall: { value: null }, tBase: { value: null }, uTexel: { value: new THREE.Vector2() }, uScatter: { value: 0.85 } });
     this.final = mk(FINAL_FS, {
       tHDR: { value: null }, tBloom: { value: null }, uExposure: { value: 1.22 }, uBloom: { value: 0.1 }, uTime: { value: 0 },
-      uCA: { value: 0.006 }, uVignette: { value: 0.55 }, uContrast: { value: 1.0 }, uRes: { value: new THREE.Vector2() },
+      uCA: { value: 0.004 }, uVignette: { value: 0.55 }, uContrast: { value: 1.0 }, uRes: { value: new THREE.Vector2() },
+      uNightK: { value: 0.5 }, uNightTint: { value: new THREE.Vector3(0.26, 0.92, 1.9) }, uWarmK: { value: 0 },
     });
     this.targets = [];
   }
@@ -317,14 +352,54 @@ export class Pipeline {
     const s = this.scale;
     this.common.uFocus.value = v.focus;
     this.common.uRange.value = v.range;
-    this.common.uAperture.value = v.aperture * s;
+    this.common.uAperture.value = this.baseAperture = v.aperture * s;
     this.common.uMaxCoc.value = this.q.dofMaxCoc * s;
+  }
+
+  // Per-frame look: focal plane from the game's contract (ctx.focusDist / ctx.focusRange, metres),
+  // the gameplay tilt-shift profile when the camera looks down on the set, aerial haze, and the
+  // per-area grade (town: moonlit blue; forest: deep teal-green with warm practicals).
+  look(camera, ctx) {
+    const c = this.common, P = this.prep.uniforms, F = this.final.uniforms;
+    const mc = lightCtx.ctx;
+    const fc = ctx && ctx.focusDist > 0 ? ctx : mc;
+    if (fc && fc.focusDist > 0) c.uFocus.value = fc.focusDist;
+    if (fc && fc.focusRange > 0) c.uRange.value = fc.focusRange;
+    const focus = c.uFocus.value, range = c.uRange.value;
+    camera.getWorldDirection(_dir);
+    const pitch = Math.asin(Math.min(1, Math.max(-1, -_dir.y))) * 57.2958;
+    // hero / cutscene framings (low tilt, long throw) keep the showcase lens; the follow camera and
+    // battle use the miniature profile
+    const game = !SHOWCASE && pitch > 11;
+    const forest = camera.position.x > 300;
+    c.uGame.value = game ? 1 : 0;
+    // the scene's gameplay blur ignores uAperture; the particle layers still size their bokeh from it,
+    // so halve it in play: near fireflies stay soft specks instead of discs pasted over faces
+    if (this.baseAperture !== undefined) c.uAperture.value = this.baseAperture * (game ? 0.5 : 1);
+    const m = c.uMaxCoc.value;
+    this.combine.uniforms.uComb.value.set(Math.min(0.6, 0.04 * m), Math.min(2.6, 0.15 * m), Math.min(1.8, 0.1 * m), Math.min(5.5, 0.32 * m));
+    if (game) {
+      c.uNearDZ.value = Math.max(range * 1.15, 0.17 * focus);
+      c.uNearSpan.value = 0.14 * focus;
+      c.uFarSpan.value = 0.62 * focus;
+      c.uFarMax.value = 0.85;
+      P.uAir.value.set(focus + range, focus * 2.3, 0.55, 0.3);
+      if (forest) P.uAirCol.value.set(0.014, 0.046, 0.06); else P.uAirCol.value.set(0.02, 0.042, 0.095);
+      F.uWarmK.value = 0.25;
+    } else {
+      P.uAir.value.set(focus + 8, focus + 70, 0.5, 0);
+      P.uAirCol.value.copy(P.uMistColor.value).multiplyScalar(1.2);
+      F.uWarmK.value = 0;
+    }
+    if (forest && !SHOWCASE) { F.uNightK.value = 0.3; F.uNightTint.value.set(0.36, 1.0, 1.4); moonOffU.value = 1; }
+    else { F.uNightK.value = 0.5; F.uNightTint.value.set(0.26, 0.92, 1.9); moonOffU.value = 0; }
   }
 
   render(scene, camera, particles, ctx, t) {
     const r = this.renderer;
     const c = this.common;
     c.uNear.value = camera.near; c.uFar.value = camera.far;
+    this.look(camera, ctx);
     // 1. scene
     r.setRenderTarget(this.rtScene);
     r.clear();

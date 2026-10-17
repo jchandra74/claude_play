@@ -8,7 +8,9 @@ import {
   PB, hex, mixc, dk, lt, vol, hash2, C, mk,
   makeChar, makeDog, makeCat, makeLyingGrandpa, makeIcons,
   makeMothPX, makeShrubPX, makeBoulderPX, makeStumpPX, makeMushPX, makeOldLampPX, makeChibiPX, makeDogPX, makeCatPX, makeLyingGrandpaPX, makeLanternPX,
+  makePinePX, makeBroadleafPX, makeDeadTreePX,
 } from './game_art.js';
+import { quality } from './config.js';
 
 const FRAMES = new Map();     // key -> { tex, w, h, canvas, emis }
 
@@ -48,6 +50,36 @@ export function epx(src) {
   }
   x.putImageData(out, 0, 0);
   return c;
+}
+
+// Whisperwood trees: generated natively at 56 px/m in a ladder of heights (and a couple of seeds per
+// rung), so any tree height lands within ~10% of the shared texel density.
+export const TREE_PX_PER_M = 56;
+const TREE_RUNGS = { pine: [], broad: [], dead: [] };
+export function treeKey(kind, h, pick = 0) {
+  const r = TREE_RUNGS[kind];
+  const want = h * TREE_PX_PER_M;
+  let best = r[0];
+  for (const e of r) if (Math.abs(Math.log(e.px / want)) < Math.abs(Math.log(best.px / want))) best = e;
+  return best.keys[Math.abs(Math.floor(pick)) % best.keys.length];
+}
+function buildTrees() {
+  const low = quality.name === 'low';
+  const spec = {
+    pine: { mk: makePinePX, h: [4.4, 5.4, 6.6, 8.0, 9.7, 11.6], seeds: low ? 1 : 2 },
+    broad: { mk: makeBroadleafPX, h: [4.2, 5.2, 6.4, 7.8], seeds: low ? 1 : 2 },
+    dead: { mk: makeDeadTreePX, h: [4.6, 6.4], seeds: 1 },
+  };
+  for (const [kind, sp] of Object.entries(spec)) for (const hm of sp.h) {
+    const px = Math.round(hm * TREE_PX_PER_M), keys = [];
+    for (let s = 0; s < sp.seeds; s++) {
+      const key = `t${kind}_${px}_${s}`;
+      const f = registerCanvas(key, sp.mk(1000 + s * 77 + px, px));
+      f.tex.name = kind === 'broad' ? 'oak_proc' : kind === 'pine' ? 'pine_proc' : 'deadwood';    // lighting.js: foliage response
+      keys.push(key);
+    }
+    TREE_RUNGS[kind].push({ px, keys });
+  }
 }
 
 export function registerCanvas(key, canvas, emisCanvas = null) {
@@ -211,6 +243,7 @@ export function buildGameTextures() {
   makeDogPX('#d8a060').forEach((c, i) => registerCanvas('dog_' + i, c));
   makeCatPX('#6a6478').forEach((c, i) => registerCanvas('cat_' + i, c));
   // forest dressing, native at the props' 56 px/m
+  buildTrees();
   for (let i = 0; i < 6; i++) { const m = makeMushPX(200 + i * 7); registerCanvas('mush_' + i, m.c, m.e).col = m.col; }
   const RS = [[52, 34], [40, 28], [64, 42], [30, 22], [46, 38], [72, 34]];
   RS.forEach(([w, h], i) => registerCanvas('rock_' + i, makeBoulderPX(300 + i * 11, w, h)));

@@ -609,10 +609,11 @@ function makeFieldMoth() {
 const INK = hex('#1b1222');
 const ramp = (...h) => h.map(hex);
 // lightness 0..1 -> ramp index, dithering a narrow band between tones
+let DITHER = true;      // off for the moths: their wings read cleaner (and match the cast) as flat bands
 function rampAt(R, s, x, y, dither = true) {
   const v = clamp(s, 0, 0.999) * R.length, i = Math.floor(v), f = v - i;
   let k = i;
-  if (!dither) return R[k];
+  if (!dither || !DITHER) return R[k];
   if (f > 0.72 && i < R.length - 1 && ((x + y) & 1) === 0) k = i + 1;
   else if (f < 0.28 && i > 0 && ((x + y) & 1) === 1) k = i - 1;
   return R[k];
@@ -692,8 +693,11 @@ function makeMothPX(big) {
   const W = big ? 186 : 70, H = big ? 156 : 58;
   const u = big ? 1.55 : 0.56;                    // feature scale
   const frames = [], emis = [];
-  const FORE = big ? ramp('#2c1b2a', '#553646', '#80545a', '#a97a6c', '#cfa585', '#ead0a6') : ramp('#2a2034', '#4f4058', '#7c6a78', '#a99896', '#d2c4b2', '#f0e6d2');
-  const HIND = big ? ramp('#311a32', '#5c3248', '#8c4e5c', '#bd7a78', '#e2a99a') : ramp('#2c2238', '#55465e', '#86737e', '#b3a29c', '#dccdbc');
+  // Gerald: deep plum-to-apricot wings with real darks so he holds strong value contrast under the
+  // moon; the mothlings: dusky violet wings (mid values, not washed-out cream) with warm eyespots
+  const FORE = big ? ramp('#1a0c1c', '#44203c', '#7a3658', '#ac5a72', '#d88c8c', '#f6c49c') : ramp('#140f26', '#2e2450', '#4e3c7a', '#765aa0', '#a080be', '#d0b4dc');
+  const HIND = big ? ramp('#1c0c22', '#4a1e46', '#80325e', '#b45a7a', '#e0909a') : ramp('#16112a', '#33285a', '#56427e', '#7e649c', '#a68ab6');
+  DITHER = false;
   const FUR = ramp('#3e3046', '#6e5c6c', '#a29096', '#cdbfba', '#ebe1d6', '#fffaf0');
   const EYE = ramp('#0e0a1c', '#1d1838', '#33306a', '#5a5aa6');
   const ANT = ramp('#3a2630', '#6e4a40', '#a07858', '#c8a47a');
@@ -820,6 +824,7 @@ function makeMothPX(big) {
     frames.push(pb.canvas());
     emis.push(big ? eb.canvas() : null);
   }
+  DITHER = true;
   return { frames, emis, w: W, h: H };
 }
 
@@ -1177,4 +1182,186 @@ function makeLanternPX(seed) {
   return { c: pb.canvas(), e: eb.canvas() };
 }
 
-export { TAU, clamp, lerp, smooth, easeOut, easeOutBack, rand, irand, pick, dist, rng, hash2, hex, mixc, mulc, css, dk, lt, mk, PB, vol, C, makeChar, drawChar, makePortrait, makeDog, makeCat, makeLyingGrandpa, makeRock, makeMushrooms, makeStump, makeBush, makeGate, makeOldLamp, makeFlowerPatch, makeShrub, makeMoth, ICONS, makeIcons, makeFieldShrub, makeFieldMoth, makeMothPX, makeShrubPX, makeBoulderPX, makeStumpPX, makeMushPX, makeOldLampPX, Sheet, ramp, rampAt, lam, INK, makeChibiPX, makeDogPX, makeCatPX, makeLyingGrandpaPX, makeLanternPX };
+
+/* ---------- Whisperwood trees, drawn natively at the props' 56 px/m ----------
+   One texel grid for the whole set: every tree is generated at its in-world height x 56 px, so the
+   canopies carry the same pixel size as the rocks, bushes and ground (no upscaled fat pixels).
+   Night palette (moonlight from the upper left): deep blue-green needles / leaves, moon-silvered
+   upper edges, 1-texel dark outline on the silhouette, 2x2-cell clump texture, no smooth gradients. */
+const PINE = ramp('#0a1418', '#132630', '#1c3a40', '#285048', '#356654', '#4a7e60', '#66986c', '#8cb47c');
+const PINE_RIM = ramp('#9cc8a4', '#c4e4c8', '#eaf8ec');
+const BARKN = ramp('#0e0c12', '#221c22', '#382c2c', '#524036', '#6e5644', '#8c7056');
+function makePinePX(seed, H) {
+  const R = rng(seed);
+  H = Math.round(H);
+  const W = Math.round(H * (0.52 + R() * 0.08));
+  const pb = new Sheet(W, H), cx = W / 2 + (R() - 0.5) * 2;
+  const base = H - 2, S = H / 400;
+  // trunk (shows in the gaps and under the lowest boughs)
+  const tw = Math.max(3, Math.round(H * 0.024));
+  pb.part(cx - tw * 3, H * 0.15, cx + tw * 3, base, (x, y) => {
+    const flare = y > base - H * 0.05 ? (y - (base - H * 0.05)) * 0.7 : 0;
+    return Math.abs(x - cx) < tw + flare ? { hw: tw + flare } : null;
+  }, (x, y, i) => {
+    const t = (x - cx) / i.hw;
+    let s = 0.6 - t * 0.42;
+    if (((x + (y >> 3)) % 3) === 0) s -= 0.14;
+    return rampAt(BARKN, s, x, y, false);
+  }, { ink: BARKN[0] });
+  // boughs: tiers drawn from the bottom up (upper tiers overlap lower ones). Each tier is a pair of
+  // drooping needle fans curving down from the trunk to the tips, with a sawtooth fringe of needle
+  // points on the underside; inside, 1-texel needle dashes run along the bough. The outer part of
+  // each tier shows its moonlit upper surface, the inner part the shadow under the tier above.
+  const nT = 7 + Math.floor(R() * 3), top = 2, bot = H * (0.8 + R() * 0.05);
+  const per = Math.max(4, Math.round(6 * S));
+  const bough = (i, sg, hw, yA, th, droop, ph, shade) => {
+    const dir = sg ? 1 : -1;
+    for (let x = Math.floor(cx + (sg ? 0 : -hw - 2)); x <= Math.ceil(cx + (sg ? hw + 2 : 0)); x++) {
+      if (x < 0 || x >= W) continue;
+      const dx = x + 0.5 - cx;
+      if (dx * dir < -1) continue;
+      const u = Math.abs(dx) / hw;
+      if (u > 1) continue;
+      // upper edge: convex, drooping toward the tip; tufts of needles poke up here and there
+      const yUp = yA + th * droop * 1.05 * Math.pow(u, 1.25) - (hash2(x >> 1, i * 2 + sg, seed + 3) > 0.82 ? 1 : 0);
+      // a thick bough near the trunk, tapering to a pointed tip
+      const thick = th * (0.45 + 0.5 * (1 - u)) * Math.min(1, (1 - u) * 5);
+      // ragged needle fringe on the underside: teeth of varying length leaning outward
+      const tooth = Math.floor((Math.abs(dx) + ph) / per), saw = ((Math.abs(dx) + ph) % per) / per;
+      const tl = 0.12 + 0.24 * hash2(tooth, i * 2 + sg, seed + 17);
+      const yLo = yUp + thick + th * tl * (1 - saw) * (0.5 + 0.6 * u);
+      for (let y = Math.floor(yUp); y <= Math.ceil(yLo); y++) {
+        if (y < 0 || y >= H) continue;
+        const d = (y - yUp) / Math.max(1, yLo - yUp);          // 0 top surface .. 1 fringe
+        let s = shade + 0.8 - d * 0.62 - (sg ? 0.14 : -0.05) * u - (1 - u) * 0.1;
+        // needle dashes running along the bough
+        const row = Math.floor((y - yUp) / 2), seg = Math.floor((Math.abs(dx) + row * 3) / (per - 1));
+        const h = hash2(row, seg * 2 + sg, seed * 13 + i);
+        if (h > 0.68) s += 0.12; else if (h < 0.2) s -= 0.12;
+        if (d > 0.9) s = 0.04;                                   // dark fringe line
+        pb.set(x, y, rampAt(PINE, s, x, y, false));
+      }
+    }
+  };
+  for (let i = nT - 1; i >= 0; i--) {
+    const a = i / nT, b = (i + 1) / nT;
+    const y0 = top + (bot - top) * Math.pow(a, 1.15) - (i ? 9 * S : 0), y1 = top + (bot - top) * Math.pow(b, 1.15);
+    const th = y1 - y0;
+    const hwBase = (W * 0.48) * (0.1 + 0.9 * Math.pow(b, 0.92));
+    for (const sg of [0, 1]) {
+      // two or three overlapping boughs per side: a long back one and shorter, lower front ones,
+      // so every tier ends in a layered, uneven set of tips
+      const n = i < 2 ? 1 : 2 + (R() < 0.4 ? 1 : 0);
+      for (let k = 0; k < n; k++) {
+        const hw = hwBase * (k === 0 ? 0.9 + R() * 0.16 : 0.5 + R() * 0.3);
+        bough(i, sg, hw, y0 + th * (k ? 0.14 + R() * 0.16 : 0), th * (k ? 0.85 : 1), 0.8 + R() * 0.3, R() * 50, k ? 0.03 : -0.05);
+      }
+    }
+  }
+  // moon-silvered upper surfaces: the top texel of each clump on the lit side
+  const src = new Uint8ClampedArray(pb.d);
+  const lum = (x, y) => { const k = (y * W + x) * 4; return src[k + 3] ? src[k] + src[k + 1] + src[k + 2] : -1; };
+  const ink = PINE[0][0] + PINE[0][1] + PINE[0][2];
+  for (let y = 1; y < H - 1; y++) for (let x = 0; x < W; x++) {
+    const l = lum(x, y); if (l < 0 || l <= ink + 2) continue;
+    const up = lum(x, y - 1);
+    if (up >= 0 && up > ink + 2) continue;            // not a top edge
+    const lit = 0.6 - (x - cx) / (W * 0.5) + (hash2(x >> 1, y, seed + 9) - 0.5) * 0.4;
+    if (lit > 0.95) { pb.set(x, y, PINE_RIM[lit > 1.3 ? 2 : 1]); if (lum(x, y + 1) > ink + 2) pb.set(x, y + 1, PINE_RIM[0]); }
+    else if (lit > 0.55) pb.set(x, y, PINE[7]);
+  }
+  pb.outlineOuter();
+  return pb.canvas();
+}
+
+const LEAFN = ramp('#08140f', '#0f2219', '#173422', '#22482c', '#305e36', '#427840', '#5a924a', '#7cac58', '#a8c870');
+function makeBroadleafPX(seed, H) {
+  const R = rng(seed);
+  H = Math.round(H);
+  const W = Math.round(H * (0.86 + R() * 0.1));
+  const pb = new Sheet(W, H), cx = W / 2, base = H - 3;
+  const S = H / 300;                                   // feature scale (300 px ~ a 5.4 m tree)
+  // trunk with a root flare, splitting into limbs under the canopy
+  const trunkTop = H * 0.45, tw = 12 * S;
+  pb.part(cx - tw * 3, trunkTop, cx + tw * 3, base, (x, y) => {
+    const t = (y - trunkTop) / (base - trunkTop);
+    const hw = tw * (0.7 + 0.3 * t) + Math.pow(Math.max(0, t - 0.8) / 0.2, 2) * tw * 1.7;
+    const wob = Math.sin(y * 0.04 + seed) * 3 * S;
+    return Math.abs(x - cx - wob) < hw ? { t, hw, wob } : null;
+  }, (x, y, i) => {
+    const u = (x - cx - i.wob) / i.hw;
+    let s = 0.56 - u * 0.42;
+    if (((x + Math.round(Math.sin(y * 0.11) * 2)) % Math.max(3, Math.round(5 * S))) === 0) s -= 0.18;   // bark furrows
+    if (hash2(x >> 1, y >> 1, seed) > 0.92) s += 0.12;
+    return rampAt(BARKN, s, x, y, false);
+  }, { ink: BARKN[0] });
+  for (const side of [-1, 1]) {
+    const pts = [[cx + side * 2 * S, trunkTop + 40 * S], [cx + side * 30 * S, trunkTop - 10 * S], [cx + side * 62 * S, trunkTop - 26 * S]];
+    pb.stroke(pts, BARKN[0], Math.max(3, Math.round(11 * S)));
+    pb.stroke(pts, BARKN[side < 0 ? 4 : 2], Math.max(1, Math.round(7 * S)));
+  }
+  // canopy: leaf clumps filling a dome; back / upper / outer clumps first, so the lower-front
+  // clumps overlap them with dark contours (reads as a mass of foliage, not one blob)
+  const clumps = [];
+  const n = 22 + Math.floor(R() * 8);
+  const ccy = H * 0.34, crx = W * 0.4, cry = H * 0.29;
+  for (let k = 0; k < n; k++) {
+    const a = R() * Math.PI * 2, rr = Math.sqrt(R());
+    const x = cx + Math.cos(a) * crx * rr, y = ccy + Math.sin(a) * cry * rr * 0.9;
+    const r = (30 + R() * 22) * S * (1.1 - rr * 0.3);
+    clumps.push([x, y, r, R()]);
+  }
+  clumps.sort((p, q) => (p[1] - Math.abs(p[0] - cx) * 0.35) - (q[1] - Math.abs(q[0] - cx) * 0.35));
+  for (const [x, y, r, sd] of clumps) {
+    pb.ellPart(x, y, r, r * 0.8, (px, py, i) => {
+      // each clump lit from the upper left, plus the dome as a whole (upper left of the crown brightest)
+      let s = lam(i.nx * 0.85, i.ny * 0.9, 0.05) * 0.5 + 0.12 - ((px - cx) / crx) * 0.1 - ((py - ccy) / cry) * 0.12;
+      const h = hash2(px >> 1, py >> 1, (sd * 997) | 0);
+      if (h > 0.82 && s > 0.3) s += 0.12; else if (h < 0.16) s -= 0.12;
+      if (hash2(px >> 1, py, 41 + seed) > 0.96 && i.ny < -0.2) s += 0.22;     // leaf glints
+      return rampAt(LEAFN, s, px, py, false);
+    }, { ink: LEAFN[0], edge: (a) => 1 - 0.1 * Math.abs(Math.sin(a * 6 + sd * 9)) - 0.06 * Math.abs(Math.sin(a * 13 + sd * 3)) });
+  }
+  // ragged leafy rim: knock out texels on the silhouette, then re-ink
+  const src = new Uint8ClampedArray(pb.d);
+  const a = (x, y) => x >= 0 && y >= 0 && x < W && y < H && src[(y * W + x) * 4 + 3] > 0;
+  for (let y = 0; y < base - H * 0.42; y++) for (let x = 0; x < W; x++) {
+    if (!a(x, y)) continue;
+    const edge = !a(x - 1, y) || !a(x + 1, y) || !a(x, y - 1);
+    if (edge && hash2(x >> 1, y >> 1, seed + 5) > 0.55) pb.clear(x, y);
+  }
+  pb.outlineOuter();
+  // re-colour the new ink ring with the darkest leaf so the canopy edge is not inked like a character
+  for (let i = 0; i < W * H; i++) if (pb.d[i * 4 + 3] && pb.d[i * 4] === INK[0] && pb.d[i * 4 + 1] === INK[1] && pb.d[i * 4 + 2] === INK[2]) { pb.d[i * 4] = 3; pb.d[i * 4 + 1] = 8; pb.d[i * 4 + 2] = 10; }
+  return pb.canvas();
+}
+
+// a bare, gnarled dead tree (the clearing's edge): limbs as tapering strokes
+function makeDeadTreePX(seed, H) {
+  const R = rng(seed);
+  H = Math.round(H);
+  const W = Math.round(H * 0.8), pb = new Sheet(W, H), S = H / 300;
+  const segs = [];
+  const grow = (x, y, ang, len, w, d) => {
+    const pts = [[x, y]];
+    let px = x, py = y, a = ang;
+    const n = 6;
+    for (let k = 0; k < n; k++) { a += (R() - 0.5) * 0.35; px += Math.sin(a) * len / n; py -= Math.cos(a) * len / n; pts.push([px, py]); }
+    segs.push([pts, w]);
+    if (d > 0 && w > 1.5) {
+      const nb = d > 2 ? 2 : 2 + Math.floor(R() * 2);
+      for (let b = 0; b < nb; b++) grow(px, py, a + (b - (nb - 1) / 2) * (0.6 + R() * 0.4), len * (0.55 + R() * 0.2), w * 0.62, d - 1);
+    }
+  };
+  grow(W / 2, H - 3, (R() - 0.5) * 0.15, H * 0.38, 16 * S, 4);
+  for (const [pts, w] of segs) pb.stroke(pts, BARKN[0], Math.max(2, Math.round(w + 2)));
+  for (const [pts, w] of segs) pb.stroke(pts, (x, y) => rampAt(BARKN, 0.75 - ((x - W / 2) / W) * 0.6 + (hash2(x >> 1, y >> 1, seed) - 0.5) * 0.2, x, y, false), Math.max(1, Math.round(w)));
+  // moonlit tops of the limbs
+  const src = new Uint8ClampedArray(pb.d);
+  for (let y = 1; y < H; y++) for (let x = 0; x < W; x++) if (src[(y * W + x) * 4 + 3] && !src[((y - 1) * W + x) * 4 + 3] && x < W * 0.62 && hash2(x, y, 3) > 0.3) pb.set(x, y, hex('#8aa0a8'));
+  // root flare
+  pb.ellPart(W / 2, H - 4, 22 * S, 5 * S, (x, y, i) => i.ny < -0.2 ? null : rampAt(BARKN, 0.5 - i.nx * 0.3, x, y, false), { ink: BARKN[0] });
+  return pb.canvas();
+}
+
+export { TAU, clamp, lerp, smooth, easeOut, easeOutBack, rand, irand, pick, dist, rng, hash2, hex, mixc, mulc, css, dk, lt, mk, PB, vol, C, makeChar, drawChar, makePortrait, makeDog, makeCat, makeLyingGrandpa, makeRock, makeMushrooms, makeStump, makeBush, makeGate, makeOldLamp, makeFlowerPatch, makeShrub, makeMoth, ICONS, makeIcons, makeFieldShrub, makeFieldMoth, makeMothPX, makeShrubPX, makeBoulderPX, makeStumpPX, makeMushPX, makeOldLampPX, Sheet, ramp, rampAt, lam, INK, makeChibiPX, makeDogPX, makeCatPX, makeLyingGrandpaPX, makeLanternPX, makePinePX, makeBroadleafPX, makeDeadTreePX };

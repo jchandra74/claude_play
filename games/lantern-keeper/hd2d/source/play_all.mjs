@@ -15,7 +15,7 @@ say(await talkTo(page, 'mayor', -1.9, 2.75, 'up', [], { onLine: async (s, n) => 
 // baker
 say(await talkTo(page, 'baker', 7.6, -3.55, 'up'));
 // Zuzu
-say(await talkTo(page, 'zuzu', 5.4, 3.4, 'up'));
+say(await talkTo(page, 'zuzu', 4.45, 2.4, 'right'));
 // Moss
 say(await talkTo(page, 'moss', -4.6, -2.45, 'left'));
 console.log(JSON.stringify(await lk(page)));
@@ -23,7 +23,7 @@ console.log(JSON.stringify(await lk(page)));
 say(await talkTo(page, 'glen', -5.3, 4.2, 'up'));
 await shot(page, 'p06_party_walk');
 // Barnaby at the east gate
-say(await talkTo(page, 'barnaby', 18.4, 0.55, 'right'));
+say(await talkTo(page, 'barnaby', 18.9, -0.95, 'up'));
 await sleep(1200); await shot(page, 'p07_gate_open');
 console.log('gate', await page.evaluate(() => LK.gateOpen));
 // through the gate

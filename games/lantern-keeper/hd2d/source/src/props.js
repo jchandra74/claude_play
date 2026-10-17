@@ -56,7 +56,9 @@ function solidTexture() {
 // darkens bright lantern-lit cobbles); fragment colour = 1 - coverage * opacity.
 export function shadowMaterial(map, opacity, flipU = false, fadeV = 0) {
   return new THREE.ShaderMaterial({
-    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    // pulled ~12 cm toward the camera in view space so a contact shadow on bumpy cobbles / raised paving
+    // / grass relief is never swallowed by the ground it lies on (a buried blob = a floating sprite)
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; vec4 mv = modelViewMatrix * vec4(position, 1.0); mv.xyz += normalize(-mv.xyz) * 0.12; gl_Position = projectionMatrix * mv; }',
     fragmentShader: `uniform sampler2D map; uniform float uOpacity, uFlip, uFade; varying vec2 vUv;
       void main(){
         vec2 uv = vec2(mix(vUv.x, 1.0 - vUv.x, uFlip), vUv.y);

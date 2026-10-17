@@ -5,9 +5,9 @@
 // Damage pops, sparks, break shards, the pixel dissolve and all menus are drawn on the 2D overlay at
 // each actor's projected screen position.
 import * as THREE from 'three';
-import { G, party, ITEMS, inventory, wait, say, narrate } from './game_state.js';
+import { G, party, ITEMS, inventory, wait, say, narrate, fadeTo } from './game_state.js';
 import { audio, sfx } from './game_audio.js';
-import { V, D, safe, panel, text, bar, rr, font, hits, pressed, clearPressed, UIC, TAU, clamp, easeOutBack } from './game_ui.js';
+import { V, D, safe, panel, text, bar, rr, font, hits, pressed, clearPressed, UIC, TAU, clamp, easeOutBack, touch } from './game_ui.js';
 import { ICONS } from './game_art.js';
 import { frame, frameCanvas } from './game_tex.js';
 import { camState, CAMS } from './game_world.js';
@@ -19,16 +19,18 @@ const css = (c, al = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${al})`;
 const TYPES = ['broom', 'sling', 'fire', 'sass'];
 const TYPE_NAME = { broom: 'Broom', sling: 'Sling', fire: 'Fire', sass: 'Sass' };
 const ENEMY_DEFS = {
-  // tuned so a normal fight lasts 3-5 rounds and wants one Break; Gerald needs two Breaks and Boosts
-  shrub: { name: 'Smug Shrub', hp: 320, atk: 14, def: 4, spd: 8, shield: 3, weak: ['fire', 'broom'], exp: 14,
+  // tuned so a normal fight lasts 3-5 rounds and wants one Break; Gerald needs two Breaks, Boosts and
+  // healing, and can win if the party ignores his wind-ups
+  shrub: { name: 'Smug Shrub', hp: 340, atk: 18, def: 5, spd: 8, shield: 3, weak: ['fire', 'broom'], exp: 14,
     moves: [{ name: 'Leaf Flick', power: 1.0, w: 3 }, { name: 'Condescending Look', power: 0.85, w: 2, line: '{e} looks at {t} condescendingly. {t}\'s self-esteem took a hit!' }] },
-  moth: { name: 'Lil\' Mothling', hp: 150, atk: 12, def: 3, spd: 14, shield: 3, weak: ['sling', 'sass'], exp: 12,
+  moth: { name: 'Lil\' Mothling', hp: 210, atk: 14, def: 4, spd: 14, shield: 3, weak: ['sling', 'sass'], exp: 12,
     moves: [{ name: 'Dust Puff', power: 1.0, w: 3 }, { name: 'Flutter', power: 0, w: 1, line: '{e} flutters menacingly. It isn\'t very menacing.' }] },
-  gerald: { name: 'Gerald', hp: 1500, atk: 17, def: 8, spd: 11, shield: 7, weak: ['broom', 'sass'], absorb: 'fire', boss: true, exp: 120,
-    moves: [{ name: 'Wing Slap', power: 1.2, w: 3 }, { name: 'Lamp Hug', heal: 90, w: 1, line: '{e} hugs himself like a lamp. Recovered {n} HP!' }, { name: 'Monologue', power: 0, w: 1, line: '{e} talks about his feelings. Nobody knows what to do with their hands.' }] },
+  gerald: { name: 'Gerald', hp: 2200, atk: 21, def: 9, spd: 11, shield: 6, weak: ['broom', 'sass'], absorb: 'fire', boss: true, exp: 120,
+    moves: [{ name: 'Wing Slap', power: 1.2, w: 3 }, { name: 'Lamp Hug', heal: 150, w: 1, line: '{e} hugs himself like a lamp. Recovered {n} HP!' }, { name: 'Monologue', power: 0, w: 1, line: '{e} talks about his feelings. Nobody knows what to do with their hands.' }] },
 };
 
 let E = null;
+const BOOST_MUL = [1, 1.7, 2.4, 3.1];     // skill power per Boost level (attacks get +1 hit per level)
 export const STAGE_POOLS = [
   { pos: new THREE.Vector3(), color: new THREE.Color(0.55, 0.5, 1.0), intensity: 0, radius: 5.2, core: 0.6, prio: -1, seed: null, weight: 9 },
   { pos: new THREE.Vector3(), color: new THREE.Color(1, 0.75, 0.5), intensity: 0, radius: 4.6, core: 0.6, prio: -1, seed: null, weight: 9 },
@@ -65,8 +67,8 @@ function stage(b) {
     e.saved = { x: e.actor.x, z: e.actor.z, lift: e.actor.lift, visible: e.actor.visible, ground: e.actor.ground };
     const big = e.kind === 'gerald';
     // a staggered diagonal: the back monster up-left, the front one down-right, never overlapping
-    e.hx = big ? cx - 3.0 : cx - (n === 1 ? 2.4 : (i % 2 ? 1.5 : 4.0));
-    e.hz = big ? cz - 0.9 : cz + (n === 1 ? 0 : (i % 2 ? 0.75 : -0.95));
+    e.hx = big ? cx - 3.2 : cx - (n === 1 ? 2.6 : (i % 2 ? 2.0 : 4.3));
+    e.hz = big ? cz - 1.0 : cz + (n === 1 ? 0 : (i % 2 ? 0.95 : -1.05));
     const A = e.actor;
     A.ground = E.ground; A.x = e.hx; A.z = e.hz; A.visible = true; A.dir = 'right'; A.U.uFade.value = 0; A.tilt = 0;
     A.lift = e.kind === 'moth' ? 0.6 : big ? 0.45 : 0;
@@ -75,7 +77,7 @@ function stage(b) {
     const A = p.id === 'pip' ? E.pip : E.moss;
     p.actor = A;
     // Pip in front (nearest the camera), Moss behind and to the right: Octopath's stepped party line
-    p.hx = cx + 2.2 + i * 1.55; p.hz = cz + 0.55 - i * 1.15;
+    p.hx = cx + 2.3 + i * 1.65; p.hz = cz + 1.0 - i * 1.9;
     A.x = p.hx; A.z = p.hz; A.dir = 'left'; A.visible = true; A.tilt = 0; A.ox = A.oz = 0;
   });
 }
@@ -91,7 +93,8 @@ function unstage(b) {
 // ---------- start ----------
 export function startBattle(kinds, opts = {}) {
   return new Promise(res => {
-    const enemies = kinds.map((k, i) => makeEnemy(k, i, kinds.length));
+    // "A" / "B" only tell apart two of the same kind
+    const enemies = kinds.map((k, i) => makeEnemy(k, kinds.slice(0, i).filter(o => o === k).length, kinds.filter(o => o === k).length));
     const b = G.battle = {
       enemies, opts, res, round: 0, order: [], actor: null, menu: null, boost: 0, msg: '', msgT: 0,
       pops: [], fx: [], t: 0, intro: 1, shake: 0, flash: 0, breakFx: 0, dust: 0,
@@ -103,15 +106,17 @@ export function startBattle(kinds, opts = {}) {
     const gy = E.ground(b.cx, b.cz);
     // (the two stage pools are pre-allocated at the front of ctx.pools; the pool list never changes shape)
     const [pA, pB] = STAGE_POOLS;
-    pA.pos.set(b.cx - 2.8, gy + 2.4, b.cz + 1.4); pA.color.set(opts.boss ? 0xff8c4d : 0x8c80ff); pA.intensity = opts.boss ? 5 : 3.5;
+    pA.pos.set(b.cx - 2.8, gy + 2.4, b.cz + 1.4); pA.color.set(opts.boss ? 0xff8c4d : 0xa59cf0); pA.intensity = opts.boss ? 4 : 2.0;
     pB.pos.set(b.cx + 3.0, gy + 2.2, b.cz + 1.6); pB.intensity = 3.5;
     // camera: battle framing round the stage centre
-    const C = opts.boss ? { ...CAMS.battle, dist: 16.5, lift: 0.6, pitch: 15 } : CAMS.battle;
+    const C = opts.boss ? { ...CAMS.battle, dist: CAMS.battle.dist + 1.5, lift: CAMS.battle.lift + 0.5 } : CAMS.battle;
     Object.assign(camState, { tx: b.cx + 0.1, ty: gy + C.lift, tz: b.cz, wantDist: C.dist, wantPitch: C.pitch, wantYaw: C.yaw, fov: C.fov, range: C.range, aperture: C.aperture, lock: true, focusOverride: null });
     Object.assign(camState, { x: camState.tx, y: camState.ty, z: camState.tz, dist: C.dist, pitch: C.pitch, yaw: C.yaw, fovNow: C.fov });
     G.mode = 'battle';
     audio.play(opts.boss ? 'boss' : 'battle');
-    runBattle().then(r => {
+    runBattle().then(async r => {
+      b.over = true;
+      await fadeTo(1, 0.35);
       unstage(b);
       for (const p of STAGE_POOLS) p.intensity = 0;
       res(r);
@@ -340,7 +345,7 @@ async function doPartyAction(a, act) {
     return;
   }
   if (act.kind === 'skill') {
-    const sk = act.skill, mul = [1, 2, 3, 4][boost];
+    const sk = act.skill, mul = BOOST_MUL[boost];
     a.sp -= sk.sp;
     bmsg(`${a.name} uses ${sk.name}!` + (boost ? ` (Boost ×${boost})` : ''), 1.1);
     await stepForward(a);
@@ -384,7 +389,7 @@ async function enemyTurn(e) {
   if (e.kind === 'gerald') {
     if (!e.enraged && e.hp < e.maxHp * 0.5) {
       e.enraged = true;
-      bmsg('Gerald is getting EMOTIONAL! He flaps twice as fast!', 1.8);
+      bmsg('Gerald is getting EMOTIONAL! He flaps faster!', 1.8);
       await wait(1.6);
     }
     if (e.telegraph) {
@@ -393,7 +398,7 @@ async function enemyTurn(e) {
       sfx('whoosh');
       b.dust = 1.2;
       await wait(0.6);
-      for (const p of aliveParty()) { enemyHit(e, p, 1.05); await wait(0.15); }
+      for (const p of aliveParty()) { enemyHit(e, p, 1.4); await wait(0.15); }
       await wait(0.7);
       e.step = 0;
       return;
@@ -426,7 +431,7 @@ async function enemyTurn(e) {
     await wait(0.9);
   }
   e.step = 0;
-  if (e.kind === 'gerald' && e.enraged && !e.extra && aliveParty().length && !e.broken) { e.extra = true; await enemyTurn(e); e.extra = false; }
+  if (e.kind === 'gerald' && e.enraged && !e.extra && aliveParty().length && !e.broken && Math.random() < 0.55) { e.extra = true; await enemyTurn(e); e.extra = false; }
 }
 function enemyHit(e, p, power) {
   let dmg = Math.max(1, Math.round((e.atk * 2 * power - p.def) * rand(0.9, 1.1)));
@@ -454,9 +459,11 @@ async function victory() {
       p.exp -= 20 + p.lv * 6; p.lv++;
       p.maxHp += 12; p.maxSp += 4; p.atk += 2; p.mag += 2; p.def += 1; p.spd += 1;
       p.hp = Math.min(p.maxHp, p.hp + 12);
-      lines.push(p.id === 'pip'
-        ? pick([`Pip reached level ${p.lv}! Pip feels slightly more like an adult.`, `Pip reached level ${p.lv}! Pip's broom technique is now "acceptable".`, `Pip reached level ${p.lv}! Pip can now name three types of cheese.`])
-        : pick([`Moss reached level ${p.lv}. Moss is unimpressed.`, `Moss reached level ${p.lv}. Moss's sighs are now 20% more devastating.`]));
+      const flav = p.id === 'pip'
+        ? ['Pip feels slightly more like an adult.', 'Pip\'s broom technique is now "acceptable".', 'Pip can now name three types of cheese.', 'Pip\'s lantern arm is getting strong.']
+        : ['Moss is unimpressed.', 'Moss\'s sighs are now 20% more devastating.', 'Moss has upgraded from "moody" to "brooding".', 'Moss would like it noted that this changes nothing.'];
+      p.flav = (p.flav ?? -1) + 1;
+      lines.push(`${p.name} reached level ${p.lv}! ${flav[p.flav % flav.length]}`);
     }
   }
   await narrate(`Gained ${exp} EXP.`);
@@ -638,6 +645,7 @@ export function drawBattle() {
   D.restore();
   if (b.flash > 0) { D.fillStyle = `rgba(255,255,255,${b.flash})`; D.fillRect(0, 0, W, H); }
   drawBattleUI();
+  drawBattleTop();
   // intro: shattered-glass swirl wipe
   if (b.intro > 0) {
     const k = b.intro;
@@ -652,110 +660,116 @@ export function drawBattle() {
 
 function drawBattleUI() {
   const b = G.battle, u = V.S, W = V.W, H = V.H, DPR = V.DPR;
+  // chrome (turn order, party, commands) steps aside for dialogue and the closing fade
+  const chrome = !G.dlg && !b.over && G.fade.a < 0.05;
   for (const e of b.enemies) {
-    if (!e.alive) continue;
+    if (!e.alive || b.over) continue;
     const big = e.kind === 'gerald';
-    // with two monsters the back one's info sits above its head so the labels never collide
+    // with two monsters the back one's info sits above its head, the front one's under its feet
     const up = b.enemies.length > 1 && b.enemies.indexOf(e) % 2 === 0;
-    // kept clear of the turn-order chips and the message banner at the top
-    const minY = 40 + safe.t * DPR / u;
-    const x = e.x * u, y = (up ? Math.max(minY, e.top - 30) : Math.min(e.y + 5, V.VH - 70)) * u;
-    text(e.name, x, y, 6.5 * u, UIC.text, 'center', 700);
-    const bw = (big ? 70 : 42) * u;
-    bar(x - bw / 2, y + 9 * u, bw, 2.5 * u, e.hp / e.maxHp, e.broken ? '#ffb050' : '#ff7a8a');
-    drawShield(x - bw / 2 - 12 * u, y + 13 * u, e);
+    const minY = 26 + safe.t * DPR / u;
+    const bw = (big ? 56 : 36) * u;
+    const lx = clamp(e.x * u, bw / 2 + 16 * u, W - bw / 2 - 8 * u);
+    const y = (up || big ? Math.max(minY, e.top - 24) : Math.min(e.y + 3, V.VH - 30)) * u;
+    text(e.name, lx, y, 5.5 * u, UIC.text, 'center', 700);
+    bar(lx - bw / 2, y + 7.5 * u, bw, 2 * u, e.hp / e.maxHp, e.broken ? '#ffb050' : '#ff7a8a');
+    drawShield(lx - bw / 2 - 11 * u, y + 10.5 * u, e);
     TYPES.forEach((ty, i) => {
-      const ix = x - bw / 2 + 2 * u + i * 11 * u, iy = y + 14 * u;
+      const ix = lx - bw / 2 + 1.5 * u + i * 9 * u, iy = y + 11.5 * u;
       const k = e.known[ty];
-      D.fillStyle = 'rgba(10,6,24,0.7)'; rr(ix - u, iy - u, 11 * u, 11 * u, 2 * u); D.fill();
+      D.fillStyle = 'rgba(10,6,24,0.7)'; rr(ix - 0.8 * u, iy - 0.8 * u, 9 * u, 9 * u, 1.5 * u); D.fill();
       D.imageSmoothingEnabled = false;
       if (k) {
         D.globalAlpha = k === 'no' ? 0.35 : 1;
-        D.drawImage(ICONS[ty], ix, iy, 9 * u, 9 * u);
+        D.drawImage(ICONS[ty], ix, iy, 7.4 * u, 7.4 * u);
         D.globalAlpha = 1;
-        if (k === 'absorb') { D.strokeStyle = '#ff6a3a'; D.lineWidth = u; D.beginPath(); D.moveTo(ix, iy); D.lineTo(ix + 9 * u, iy + 9 * u); D.stroke(); }
-      } else D.drawImage(ICONS.q, ix, iy, 9 * u, 9 * u);
+        if (k === 'absorb') { D.strokeStyle = '#ff6a3a'; D.lineWidth = u; D.beginPath(); D.moveTo(ix, iy); D.lineTo(ix + 7.4 * u, iy + 7.4 * u); D.stroke(); }
+      } else D.drawImage(ICONS.q, ix, iy, 7.4 * u, 7.4 * u);
     });
-    if (e.broken) text('BREAK', x, (up ? Math.max(minY - 11, e.top - 42) : e.top - 16) * u, 8 * u, '#ffd060', 'center', 700);
-    if (e.telegraph) text('WINDING UP!', x, Math.max(minY - 11, e.top - 14) * u, 7 * u, '#ff9a6a', 'center', 700);
+    if (e.broken) text('BREAK', e.x * u, (e.top - 8) * u, 7 * u, '#ffd060', 'center', 700);
+    if (e.telegraph) text('WINDING UP!', e.x * u, (e.top - 8) * u, 6.5 * u, '#ff9a6a', 'center', 700);
   }
+  if (!chrome) return;
   // turn order
   const order = b.order.filter(a => a.hp > 0 && a.alive !== false);
-  let ox = 10 * u + safe.l * DPR;
-  text('TURN', ox, 7 * u + safe.t * DPR, 5.5 * u, UIC.dim, 'left', 700);
-  ox += 22 * u;
+  let ox = 8 * u + safe.l * DPR;
+  const oy = 5 * u + safe.t * DPR;
+  text('TURN', ox, oy + 1.2 * u, 4.5 * u, UIC.dim, 'left', 700);
+  ox += 16 * u;
   order.forEach(a => {
     const isP = party.includes(a), cur = b.order[b.orderIdx] === a;
-    const w = 20 * u;
-    D.fillStyle = cur ? 'rgba(255,215,90,0.9)' : isP ? 'rgba(80,140,230,0.75)' : 'rgba(200,70,90,0.75)';
-    rr(ox, 5 * u + safe.t * DPR, w, 10 * u, 3 * u); D.fill();
-    text(isP ? a.name.slice(0, 4) : a.name.replace("Lil' ", '').slice(0, 4), ox + w / 2, 6.5 * u + safe.t * DPR, 5.5 * u, cur ? '#2a1a10' : '#fff', 'center', 700, false);
-    ox += w + 3 * u;
+    const w = 17 * u;
+    D.fillStyle = cur ? 'rgba(255,215,90,0.9)' : isP ? 'rgba(80,140,230,0.7)' : 'rgba(200,70,90,0.7)';
+    rr(ox, oy, w, 7.5 * u, 2.5 * u); D.fill();
+    text(isP ? a.name.slice(0, 4) : a.name.replace("Lil' ", '').slice(0, 4), ox + w / 2, oy + 1.2 * u, 4.6 * u, cur ? '#2a1a10' : '#fff', 'center', 700, false);
+    ox += w + 2 * u;
   });
-  // party panel
-  const pw = 150 * u, ph = (b.active.length * 22 + 8) * u, px = W - pw - 8 * u - safe.r * DPR, py = H - ph - 8 * u - safe.b * DPR;
-  panel(px, py, pw, ph);
+  // party panel: one compact row per member (name, HP, SP, Boost pips)
+  const rowH = 14 * u, pw = 128 * u, ph = b.active.length * rowH + 5 * u, px = W - pw - 6 * u - safe.r * DPR, py = H - ph - 6 * u - safe.b * DPR;
+  panel(px, py, pw, ph, { noStuds: true, r: 2.5 * u });
   b.active.forEach((p, i) => {
-    const y = py + 6 * u + i * 22 * u, cur = b.actor === p;
-    if (cur) { D.fillStyle = 'rgba(122,216,255,0.14)'; rr(px + 3 * u, y - 2 * u, pw - 6 * u, 21 * u, 2 * u); D.fill(); }
-    text(p.name, px + 8 * u, y, 7 * u, p.hp <= 0 ? UIC.red : cur ? UIC.blue : UIC.text, 'left', 700);
-    bar(px + 42 * u, y + 2 * u, 50 * u, 3 * u, p.hp / p.maxHp, p.hp < p.maxHp * 0.3 ? '#ff8a6a' : '#7aeb8a');
-    text(`${p.hp}`, px + 42 * u, y + 6 * u, 5.5 * u, UIC.dim, 'left', 600, false);
-    bar(px + 98 * u, y + 2 * u, 42 * u, 3 * u, p.sp / p.maxSp, '#7ac8ff');
-    text(`${p.sp}`, px + 98 * u, y + 6 * u, 5.5 * u, UIC.dim, 'left', 600, false);
+    const y = py + 3 * u + i * rowH, cur = b.actor === p;
+    if (cur) { D.fillStyle = 'rgba(122,216,255,0.14)'; rr(px + 2 * u, y - 0.5 * u, pw - 4 * u, rowH - 0.5 * u, 2 * u); D.fill(); }
+    text(p.name, px + 6 * u, y + 0.8 * u, 6.2 * u, p.hp <= 0 ? UIC.red : cur ? UIC.blue : UIC.text, 'left', 700);
     for (let k = 0; k < 5; k++) {
       const filled = k < b.bp[p.id], pending = cur && k >= b.bp[p.id] - b.boost && k < b.bp[p.id];
       D.fillStyle = pending ? (Math.floor(G.t * 8) % 2 ? '#ffffff' : '#ff8ae0') : filled ? '#ffd060' : 'rgba(255,255,255,0.15)';
-      D.beginPath(); D.arc(px + 22 * u + k * 6 * u, y + 15 * u, 2 * u, 0, TAU); D.fill();
+      D.beginPath(); D.arc(px + 7.5 * u + k * 4.4 * u, y + 10 * u, 1.5 * u, 0, TAU); D.fill();
     }
-    text('BP', px + 8 * u, y + 12.5 * u, 5 * u, UIC.dim, 'left', 700, false);
+    const hx = px + 32 * u;
+    text('HP', hx, y + 1.3 * u, 4.3 * u, UIC.dim, 'left', 700, false);
+    text(`${p.hp}`, hx + 44 * u, y + 0.6 * u, 5.6 * u, p.hp < p.maxHp * 0.3 ? '#ff9a7a' : UIC.text, 'right', 700, false);
+    bar(hx, y + 8 * u, 44 * u, 2.4 * u, p.hp / p.maxHp, p.hp < p.maxHp * 0.3 ? '#ff8a6a' : '#7aeb8a');
+    const sx = px + 84 * u;
+    text('SP', sx, y + 1.3 * u, 4.3 * u, UIC.dim, 'left', 700, false);
+    text(`${p.sp}`, sx + 38 * u, y + 0.6 * u, 5.6 * u, p.sp < 6 ? '#ff9a7a' : UIC.text, 'right', 700, false);
+    bar(sx, y + 8 * u, 38 * u, 2.4 * u, p.sp / p.maxSp, '#7ac8ff');
   });
   // command menus
   const m = b.menu;
-  if (m && !G.dlg) {
+  if (m) {
     const a = m.actor;
-    const cw = 84 * u, cx = 8 * u + safe.l * DPR, rowH = 12.5 * u;
+    const cw = 62 * u, cx = 6 * u + safe.l * DPR, rowH = 10 * u;
     if (m.stage === 'cmd' || m.stage === 'target') {
       const cmds = battleCommands(a);
-      const ch = cmds.length * rowH + 10 * u, cy = H - ch - 8 * u - safe.b * DPR;
-      panel(cx, cy, cw, ch);
+      const ch = cmds.length * rowH + 6 * u, cy = H - ch - 6 * u - safe.b * DPR;
+      panel(cx, cy, cw, ch, { noStuds: true, r: 2.5 * u });
       cmds.forEach((c, i) => {
-        const y = cy + 5 * u + i * rowH, sel = i === m.sel && m.stage === 'cmd';
-        if (sel) { D.fillStyle = 'rgba(255,215,90,0.18)'; rr(cx + 3 * u, y, cw - 6 * u, rowH - u, 2 * u); D.fill(); }
-        text(c.label, cx + 10 * u, y + 2.5 * u, 7 * u, sel ? UIC.gold : UIC.text, 'left', 700);
-        if (c.sub) text(c.sub, cx + cw - 8 * u, y + 3.5 * u, 5.5 * u, UIC.dim, 'right', 600, false);
+        const y = cy + 3 * u + i * rowH, sel = i === m.sel && m.stage === 'cmd';
+        if (sel) { D.fillStyle = 'rgba(255,215,90,0.18)'; rr(cx + 2 * u, y, cw - 4 * u, rowH - 0.5 * u, 2 * u); D.fill(); }
+        text(c.label, cx + 7 * u, y + 2 * u, 6.2 * u, sel ? UIC.gold : UIC.text, 'left', 700);
+        if (c.sub) text(c.sub, cx + cw - 5 * u, y + 2.8 * u, 4.6 * u, UIC.dim, 'right', 600, false);
         hits.push({ x: cx, y, w: cw, h: rowH, fn: () => { if (G.battle && G.battle.menu === m && !G.dlg) { m.stage = 'cmd'; m.allyT = false; pickCmd(i); } } });
       });
       if (m.stage === 'target') {
-        text(m.allyT ? 'Choose an ally' : 'Choose a target', W / 2, 22 * u + safe.t * DPR, 7 * u, UIC.gold, 'center', 700);
+        text(m.allyT ? 'Choose an ally' : 'Choose a target', W / 2, 20 * u + safe.t * DPR, 6.5 * u, UIC.gold, 'center', 700);
         targetList().forEach((tg, i) => {
           const tx = (m.allyT ? tg.bx : tg.x) * u, top = (m.allyT ? tg.btop : tg.top) * u, bot = (m.allyT ? tg.by : tg.y) * u;
           const w = Math.max(30 * u, (m.allyT ? 24 : tg.w) * u);
           hits.push({ x: tx - w / 2, y: top, w, h: bot - top + 10 * u, fn: () => { if (G.battle && G.battle.menu === m) { m.tsel = i; pickTarget(i); } } });
         });
-        backButton(cx + cw + 6 * u, H - 24 * u - safe.b * DPR, () => { if (G.battle.menu === m) { m.stage = m.prev || 'cmd'; m.allyT = false; sfx('back'); } });
+        backButton(cx + cw + 4 * u, H - 22 * u - safe.b * DPR, () => { if (G.battle.menu === m) { m.stage = m.prev || 'cmd'; m.allyT = false; sfx('back'); } });
       }
     } else {
       const list = m.stage === 'skill' ? a.skills : itemList().map(k => ({ name: ITEMS[k].name, key: k, desc: ITEMS[k].desc, type: ITEMS[k].type }));
-      const lw = 170 * u, lh = list.length * rowH + 22 * u, ly = H - lh - 8 * u - safe.b * DPR;
-      panel(cx, ly, lw, lh);
+      const lw = 132 * u, lh = list.length * rowH + 16 * u, ly = H - lh - 6 * u - safe.b * DPR;
+      panel(cx, ly, lw, lh, { noStuds: true, r: 2.5 * u });
       list.forEach((s, i) => {
-        const y = ly + 5 * u + i * rowH, sel = i === m.sel2;
+        const y = ly + 3 * u + i * rowH, sel = i === m.sel2;
         const can = m.stage !== 'skill' || a.sp >= s.sp;
-        if (sel) { D.fillStyle = 'rgba(255,215,90,0.18)'; rr(cx + 3 * u, y, lw - 6 * u, rowH - u, 2 * u); D.fill(); }
-        if (s.type && ICONS[s.type]) { D.imageSmoothingEnabled = false; D.drawImage(ICONS[s.type], cx + 7 * u, y + 2 * u, 9 * u, 9 * u); }
-        text(s.name, cx + 19 * u, y + 3 * u, 7 * u, !can ? '#7a7090' : sel ? UIC.gold : UIC.text, 'left', 700);
-        text(m.stage === 'skill' ? `${s.sp} SP` : `×${inventory[s.key]}`, cx + lw - 8 * u, y + 4 * u, 6 * u, UIC.blue, 'right', 600, false);
+        if (sel) { D.fillStyle = 'rgba(255,215,90,0.18)'; rr(cx + 2 * u, y, lw - 4 * u, rowH - 0.5 * u, 2 * u); D.fill(); }
+        if (s.type && ICONS[s.type]) { D.imageSmoothingEnabled = false; D.drawImage(ICONS[s.type], cx + 5 * u, y + 1.5 * u, 7 * u, 7 * u); }
+        text(s.name, cx + 15 * u, y + 2 * u, 6.2 * u, !can ? '#7a7090' : sel ? UIC.gold : UIC.text, 'left', 700);
+        text(m.stage === 'skill' ? `${s.sp} SP` : `×${inventory[s.key]}`, cx + lw - 6 * u, y + 2.6 * u, 5 * u, UIC.blue, 'right', 600, false);
         hits.push({ x: cx, y, w: lw, h: rowH, fn: () => { if (G.battle.menu === m) pickSub(i); } });
       });
       const sel = list[m.sel2];
-      if (sel) text(sel.desc + (m.stage === 'skill' && b.boost ? `  Boost ×${b.boost + 1}` : ''), cx + 8 * u, ly + lh - 14 * u, 5.5 * u, UIC.dim);
-      backButton(cx + lw + 6 * u, H - 24 * u - safe.b * DPR, () => { if (G.battle.menu === m) { m.stage = 'cmd'; sfx('back'); } });
+      if (sel) text(sel.desc + (m.stage === 'skill' && b.boost ? `  Boost ×${BOOST_MUL[b.boost]}` : ''), cx + 6 * u, ly + lh - 11 * u, 4.8 * u, UIC.dim);
+      backButton(cx + lw + 4 * u, H - 22 * u - safe.b * DPR, () => { if (G.battle.menu === m) { m.stage = 'cmd'; sfx('back'); } });
     }
     // boost button: docked to the party panel, level with the acting character's row
     const ai = Math.max(0, b.active.indexOf(a));
-    const br = 14 * u, bx = px - br - 5 * u, by = py + 6 * u + ai * 22 * u + 8 * u;
-    D.fillStyle = 'rgba(122,216,255,0.25)'; D.fillRect(bx + br, by - 0.5 * u, 6 * u, u);
+    const br = 10 * u, bx = px - br - 4 * u, by = py + 3 * u + ai * rowH + rowH / 2;
     const can = b.bp[a.id] > 0;
     const pulse = b.boost ? 1 + Math.sin(G.t * 10) * 0.05 : 1;
     const gg = D.createRadialGradient(bx - br * 0.3, by - br * 0.3, br * 0.1, bx, by, br * pulse);
@@ -763,24 +777,28 @@ function drawBattleUI() {
     gg.addColorStop(0, cols[0]); gg.addColorStop(1, cols[1]);
     D.globalAlpha = can ? 1 : 0.5;
     D.fillStyle = gg; D.beginPath(); D.arc(bx, by, br * pulse, 0, TAU); D.fill();
-    D.strokeStyle = 'rgba(255,255,255,0.7)'; D.lineWidth = u * 0.6; D.stroke();
-    text('BOOST', bx, by - 5 * u, 5.5 * u, '#fff', 'center', 700);
-    text(b.boost ? '×' + (b.boost + 1) : '—', bx, by + 1 * u, 7 * u, '#fff', 'center', 700);
+    D.strokeStyle = 'rgba(255,255,255,0.7)'; D.lineWidth = u * 0.5; D.stroke();
+    text('BOOST', bx, by - 4.6 * u, 4.2 * u, '#fff', 'center', 700);
+    text(b.boost ? '×' + (b.boost + 1) : '—', bx, by + 0.2 * u, 5.6 * u, '#fff', 'center', 700);
+    if (!touch.ui) text('E / Q', bx, by + br + 1.5 * u, 4.2 * u, UIC.dim, 'center', 600);
     D.globalAlpha = 1;
     hits.push({ x: bx - br, y: by - br, w: br * 2, h: br * 2, fn: () => { if (G.battle.menu === m) boostChange(1); } });
   }
-  if (b.msgT > 0 && b.msg) {
-    D.font = font(7.5 * u, 600);
-    const w = Math.min(W - 20 * u, D.measureText(b.msg).width + 24 * u);
+}
+function drawBattleTop() {
+  const b = G.battle, u = V.S, W = V.W, H = V.H, DPR = V.DPR;
+  if (b.msgT > 0 && b.msg && !b.over && !G.dlg) {
+    D.font = font(6.5 * u, 600);
+    const w = Math.min(W - 20 * u, D.measureText(b.msg).width + 20 * u);
     D.globalAlpha = Math.min(1, b.msgT * 4);
-    panel((W - w) / 2, 20 * u + safe.t * DPR, w, 15 * u, { r: 7 * u, noStuds: true });
-    text(b.msg, W / 2, 23.5 * u + safe.t * DPR, 7.5 * u, UIC.text, 'center', 600);
+    panel((W - w) / 2, 16 * u + safe.t * DPR, w, 12.5 * u, { r: 6 * u, noStuds: true });
+    text(b.msg, W / 2, 19 * u + safe.t * DPR, 6.5 * u, UIC.text, 'center', 600);
     D.globalAlpha = 1;
   }
   for (const p of b.pops) {
     const k = p.t / 1.1, rise = easeOutBack(Math.min(1, p.t * 4)) * 10;
     D.globalAlpha = Math.min(1, (1 - k) * 3);
-    text(p.str, p.x * u, (p.y - rise) * u, (p.big ? 11 : 7.5) * u, p.col, 'center', 700);
+    text(p.str, p.x * u, (p.y - rise) * u, (p.big ? 9.5 : 6.5) * u, p.col, 'center', 700);
     D.globalAlpha = 1;
   }
   if (b.breakFx > 0) {
@@ -789,7 +807,7 @@ function drawBattleUI() {
     D.save();
     D.globalAlpha = Math.min(1, b.breakFx * 2);
     D.translate(W / 2, H * 0.4); D.rotate(-0.08); D.scale(sc, sc);
-    D.font = font(34 * u, 700); D.textAlign = 'center'; D.textBaseline = 'middle';
+    D.font = font(28 * u, 700); D.textAlign = 'center'; D.textBaseline = 'middle';
     D.lineWidth = 3 * u; D.strokeStyle = '#2a0a20'; D.strokeText('BREAK!', 0, 0);
     const g = D.createLinearGradient(0, -16 * u, 0, 16 * u); g.addColorStop(0, '#fff8c0'); g.addColorStop(0.5, '#ffd040'); g.addColorStop(1, '#ff6a3a');
     D.fillStyle = g; D.fillText('BREAK!', 0, 0);

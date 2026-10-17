@@ -40,7 +40,11 @@ const poolU = {
   uPoolPos: { value: Array.from({ length: POOL_MAX }, () => new THREE.Vector4()) },
   uPoolCol: { value: Array.from({ length: POOL_MAX }, () => new THREE.Vector4()) },
   uPoolCount: { value: 0 },
+  uMoonOff: { value: 0 },
 };
+export const moonOffU = poolU.uMoonOff;
+// the main scene context (post.js reads ctx.focusDist / ctx.focusRange from it every frame)
+export const lightCtx = { ctx: null };
 // Shared GLSL: accumulate diffuse irradiance from all pools at view-space position P with normal N.
 const POOL_SUM = `
   for ( int pi = 0; pi < ${POOL_MAX}; pi ++ ) {
@@ -73,9 +77,12 @@ const MOON_GLSL = `
 #ifndef MOON_KI
 #define MOON_KI 0.86
 #endif
+uniform float uMoonOff;
 vec3 moonTint( vec3 c, float k ) {
   float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
-  return mix( c, l * vec3( 0.26, 0.92, 2.05 ), k );
+  // uMoonOff (per area, set from post.js): the forest keeps more of its albedo hue (moss greens,
+  // bark browns) under the moon instead of collapsing into the town's single navy
+  return mix( c, l * mix( vec3( 0.26, 0.92, 2.05 ), vec3( 0.42, 0.98, 1.5 ), uMoonOff ), k * ( 1.0 - 0.55 * uMoonOff ) );
 }`;
 let chunkPatched = false;
 function patchChunks() {
@@ -123,7 +130,19 @@ ${POOL_SUM}
 #undef POOL_N
 #undef POOL_OUT
 #endif
-  reflectedLight.directDiffuse += poolIrr * BRDF_Lambert( material.diffuseColor );
+  // warm lamp light on green blades / grass ground multiplies out to acid lime; green albedo takes
+  // the pool as a warm amber key on its luminance instead (Octopath's lamp-lit grass reads gold)
+  vec3 pf = poolIrr * BRDF_Lambert( material.diffuseColor );
+  float pfl = dot( pf, vec3( 0.2126, 0.7152, 0.0722 ) );
+  vec3 palb = material.diffuseColor;
+  float pgr = smoothstep( 0.04, 0.3, ( palb.g - max( palb.r, palb.b ) ) / max( palb.g, 1e-3 ) );
+#ifdef POOL_FOLIAGE
+  pgr = max( pgr, 1.0 );
+#endif
+#ifdef POOL_KEEPHUE
+  pgr = 0.0;   // characters / creatures keep their own costume colours under the lamps
+#endif
+  reflectedLight.directDiffuse += mix( pf, pfl * vec3( 1.35, 0.85, 0.42 ), 0.6 * pgr );
 }
 #endif
 ` + THREE.ShaderChunk.lights_fragment_end;
@@ -144,6 +163,25 @@ ${POOL_SUM}
 }
 #endif`;
 
+// unnamed procedural foliage textures (forest tufts, bushes): classify by their mean opaque colour
+const greenCache = new Map();
+function greenMap(map) {
+  const img = map && map.image;
+  if (!img || !img.width) return false;
+  if (greenCache.has(img)) return greenCache.get(img);
+  let res = false;
+  try {
+    const c = document.createElement('canvas'); c.width = c.height = 16;
+    const g = c.getContext('2d'); g.drawImage(img, 0, 0, 16, 16);
+    const d = g.getImageData(0, 0, 16, 16).data;
+    let r = 0, gg = 0, b = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 128) { r += d[i]; gg += d[i + 1]; b += d[i + 2]; n++; }
+    res = n > 4 && gg > r * 1.15 && gg > b * 0.95;
+  } catch (e) { res = false; }
+  greenCache.set(img, res);
+  return res;
+}
+
 function hookMaterial(m) {
   if (!m || !m.isMeshStandardMaterial || m.userData.poolHooked) return;
   m.userData.poolHooked = true;
@@ -151,16 +189,17 @@ function hookMaterial(m) {
   const prev = m.onBeforeCompile;
   const prevKey = m.customProgramCacheKey();
   // foliage keeps a little more of its green under the moon and gets a moon rim
-  const leafy = /leafclump/.test(prevKey) || /tuft|grass|bush|pine|oak/.test(m.map && m.map.name || '');
-  const leafDefs = /leafclump/.test(prevKey) ? '#define MOON_RIM\n#define MOON_KD 0.6\n#define MOON_KI 0.7\n' : leafy ? '#define MOON_KD 0.7\n#define MOON_KI 0.78\n' : '';
+  const leafy = /leafclump/.test(prevKey) || /tuft|grass|bush|pine|oak/.test(m.map && m.map.name || '') || (m.alphaTest > 0 && !/^actor-rim/.test(prevKey) && greenMap(m.map));
+  const leafDefs = /leafclump/.test(prevKey) ? '#define MOON_RIM\n#define MOON_KD 0.6\n#define MOON_KI 0.7\n#define POOL_FOLIAGE\n' : leafy ? '#define MOON_KD 0.7\n#define MOON_KI 0.78\n#define POOL_FOLIAGE\n' : '';
   const actor = /^actor-rim/.test(prevKey);
   m.onBeforeCompile = function (sh, r) {
     prev.call(this, sh, r);
-    if (actor) charPop(sh);
+    if (actor) { charPop(sh); sh.fragmentShader = '#define POOL_KEEPHUE\n' + sh.fragmentShader; }
     if (leafDefs) sh.fragmentShader = leafDefs + sh.fragmentShader;
     sh.uniforms.uPoolPos = poolU.uPoolPos;
     sh.uniforms.uPoolCol = poolU.uPoolCol;
     sh.uniforms.uPoolCount = poolU.uPoolCount;
+    sh.uniforms.uMoonOff = poolU.uMoonOff;
     if (perVertex) {
       sh.fragmentShader = '#define POOL_VERTEX\n' + sh.fragmentShader;
       sh.vertexShader = '#define POOL_VERTEX\n' + sh.vertexShader
@@ -185,12 +224,11 @@ const CHAR_POP = `{
   float cpk = uCharPop;
   vec3 flo = cb * vec3(0.26, 0.31, 0.42) * cpk;
   outgoingLight = max(outgoingLight, flo) + cb * vec3(0.05, 0.065, 0.09) * cpk;
-  float ce = 0.0;
-  ce = max(ce, step(texture2D(map, vMapUv + vec2(2.0 * uTexel.x, 0.0)).a, 0.5));
-  ce = max(ce, step(texture2D(map, vMapUv - vec2(2.0 * uTexel.x, 0.0)).a, 0.5));
-  ce = max(ce, step(texture2D(map, vMapUv + vec2(0.0, 2.0 * uTexel.y)).a, 0.5));
+  // moon rim: only the one texel row under the silhouette's TOP edge (the moon is high behind the
+  // set), pale and low-saturation, so it reads as moonlight on hair / shoulders, not a sticker outline
+  float ce = step(texture2D(map, vMapUv + vec2(0.0, uTexel.y)).a, 0.5);
   float cbl = dot(cb, vec3(0.3, 0.59, 0.11));
-  outgoingLight += vec3(0.075, 0.13, 0.24) * ce * (0.4 + cbl) * cpk;
+  outgoingLight += vec3(0.05, 0.065, 0.085) * ce * (0.3 + cbl) * cpk;
   float col = dot(outgoingLight, vec3(0.2126, 0.7152, 0.0722));
   outgoingLight = max(mix(vec3(col), outgoingLight, 1.0 + 0.15 * cpk), 0.0);
 }
@@ -334,6 +372,7 @@ function bendSpriteNormals(mesh, k = 0.75) {
 
 export function buildLighting(ctx) {
   const { scene } = ctx;
+  lightCtx.ctx = ctx;
   ctx.hazeLights = [];
   ctx.flicker = [];
   ctx.pools = [];
@@ -548,7 +587,8 @@ function applyLevel(ctx, t) {
   let lampSum = 0, lampN = 0;
   for (const L of FX.lamps) {
     const on = sstep(L.thr, L.thr + 0.14, k);
-    const g = 0.07 + 0.17 * gutter(t, L.seed);
+    // guttering, but still a real local light: each lamp keeps a small warm pool round its post
+    const g = 0.2 + 0.2 * gutter(t, L.seed);
     // ignition: a brief over-bright catch as the lamp lights
     const catchK = 1 + 0.35 * Math.max(0, 1 - Math.abs((k - L.thr - 0.07) / 0.07)) * (on > 0 && on < 1 ? 1 : 0);
     const lv = Math.min(1.35, (g + (1 - g) * on) * catchK);
@@ -562,8 +602,10 @@ function applyLevel(ctx, t) {
   FX.lampGlass.value = lampN ? lampSum / lampN : kl;
   if (FX.bulbs) FX.bulbs.mat.color.copy(FX.bulbs.base).multiplyScalar(0.03 + 0.97 * sstep(0.2, 0.7, k));
   // the town without its lantern: the moon takes over, a touch brighter and colder
-  if (ctx.moon) ctx.moon.intensity = FX.moonBase * (1 + 0.45 * (1 - kl));
-  if (ctx.hemi) ctx.hemi.intensity = FX.hemiBase * (1 + 0.25 * (1 - kl));
+  // (the flat sky ambient is NOT raised: lifting it washed the whole plaza one even blue; the extra
+  //  light comes from the directional moon, which keeps a lit side / shadow side and real local contrast)
+  if (ctx.moon) ctx.moon.intensity = FX.moonBase * (1 + 0.35 * (1 - kl));
+  if (ctx.hemi) ctx.hemi.intensity = FX.hemiBase * (1 - 0.18 * (1 - kl));
   for (const c of FX.chars) applyChar(c, k);
   charPopU.value = 1 - 0.45 * kl;
   if (ctx.daisWarm) ctx.daisWarm.value.copy(ctx.daisWarm.userData.base).multiplyScalar(kl);
@@ -650,6 +692,9 @@ export function updateLighting(ctx, t) {
     let k = pl.intensity * (pl.mul ?? 1), rad = pl.radius;
     if (pl.prio === -2) { const sm = pl.radius < 4.5; k *= sm ? CARRY_GAIN : BIG_CARRY_GAIN; rad *= sm ? CARRY_R : 1.15; carriedFx(ctx, pl, k); }
     else if (pl.prio === -1) { k *= STAGE_GAIN * (pl.color.b > pl.color.r ? 1.8 : 1); rad *= STAGE_R; }
+    // forest moonbeam landings (forest.js registers them as cool, unflickered pools): the shaft has
+    // to visibly brighten the ground where it lands, so they get a gain and a tighter, hotter core
+    else if (pl.prio >= 5 && pl.seed === null && pl.color.b > pl.color.r) { k *= 1.9; }
     if (k <= 1e-4) continue;
     _sphere.center.copy(pl.pos); _sphere.radius = rad;
     if (!_frustum.intersectsSphere(_sphere)) continue;
@@ -667,7 +712,7 @@ export function updateLighting(ctx, t) {
     const { pl, rad } = cs[i];
     let k = cs[i].k;
     const carry = pl.prio === -2 && pl.radius < 4.5;
-    const core = carry ? pl.core * 0.35 : pl.core;
+    const core = carry ? pl.core * 0.35 : (pl.prio >= 5 && pl.seed === null && pl.color.b > pl.color.r) ? pl.core * 2.2 : pl.core;
     // a hand lantern lights from above the hand (a broad, soft pool that also keys the faces nearby)
     _v.copy(pl.pos); if (carry) _v.y += CARRY_LIFT;
     _v.applyMatrix4(cam.matrixWorldInverse);

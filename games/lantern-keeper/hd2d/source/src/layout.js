@@ -227,7 +227,7 @@ export const PROPS = [
   { type: 'great_lantern', x: 0, z: -1.2, h: 5.6 },
   { type: 'well', x: -5.2, z: 2.0, h: 1.75 },
   { type: 'lamp', x: -5.3, z: -5.2, h: 2.7 },
-  { type: 'lamp', x: 5.6, z: -3.6, h: 2.7 },
+  { type: 'lamp', x: 6.3, z: -3.7, h: 2.7 },
   { type: 'lamp', x: -6.6, z: 3.9, h: 2.7 },
   { type: 'lamp', x: 3.7, z: 3.3, h: 2.7 },
   { type: 'lamp', x: -3.3, z: -12.0, h: 2.7 },
@@ -240,8 +240,8 @@ export const PROPS = [
   { type: 'crate', x: 2.0, z: -8.3, h: 0.72 }, { type: 'barrel', x: 2.7, z: -8.5, h: 0.8 },
   // bakery clutter
   { type: 'barrel', x: 12.2, z: -5.0, h: 0.8 }, { type: 'barrel', x: 12.4, z: -4.3, h: 0.78 },
-  { type: 'crate', x: 11.5, z: -4.6, h: 0.72 }, { type: 'crate', x: 5.0, z: -5.3, h: 0.72 },
-  { type: 'crate', x: 5.4, z: -5.7, h: 0.55, flip: true },
+  { type: 'crate', x: 11.5, z: -4.6, h: 0.72 }, { type: 'crate', x: 5.7, z: -5.25, h: 0.72 },
+  { type: 'crate', x: 6.1, z: -5.65, h: 0.55, flip: true },
   // west terrace / stairs
   { type: 'barrel', x: -9.4, z: -5.6, h: 0.8 }, { type: 'crate', x: -10.0, z: -5.1, h: 0.72 },
   { type: 'barrel', x: -8.9, z: 1.9, h: 0.8 }, { type: 'flowers', x: -8.7, z: -0.3, h: 0.5 },

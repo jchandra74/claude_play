@@ -42,8 +42,8 @@ export const ITEMS = {
 export const inventory = { cookie: 0, tea: 1, popper: 1 };
 
 export function resetParty() {
-  Object.assign(party[0], { lv: 3, exp: 0, hp: 120, maxHp: 120, sp: 40, maxSp: 40, atk: 14, mag: 15, def: 8, spd: 10 });
-  Object.assign(party[1], { lv: 3, exp: 0, hp: 96, maxHp: 96, sp: 48, maxSp: 48, atk: 12, mag: 17, def: 6, spd: 13, joined: false });
+  Object.assign(party[0], { flav: -1, lv: 3, exp: 0, hp: 120, maxHp: 120, sp: 40, maxSp: 40, atk: 14, mag: 15, def: 8, spd: 10 });
+  Object.assign(party[1], { flav: -1, lv: 3, exp: 0, hp: 96, maxHp: 96, sp: 48, maxSp: 48, atk: 12, mag: 17, def: 6, spd: 13, joined: false });
   Object.assign(inventory, { cookie: 0, tea: 1, popper: 1 });
   for (const k in G.flags) delete G.flags[k];
   G.stats.wins = 0; G.stats.breaks = 0; G.objective = ''; G.lastDlg = null;
