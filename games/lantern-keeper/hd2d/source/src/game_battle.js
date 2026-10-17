@@ -19,12 +19,13 @@ const css = (c, al = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${al})`;
 const TYPES = ['broom', 'sling', 'fire', 'sass'];
 const TYPE_NAME = { broom: 'Broom', sling: 'Sling', fire: 'Fire', sass: 'Sass' };
 const ENEMY_DEFS = {
-  shrub: { name: 'Smug Shrub', hp: 88, atk: 13, def: 4, spd: 8, shield: 2, weak: ['fire', 'broom'], exp: 14,
+  // tuned so a normal fight lasts 3-5 rounds and wants one Break; Gerald needs two Breaks and Boosts
+  shrub: { name: 'Smug Shrub', hp: 320, atk: 14, def: 4, spd: 8, shield: 3, weak: ['fire', 'broom'], exp: 14,
     moves: [{ name: 'Leaf Flick', power: 1.0, w: 3 }, { name: 'Condescending Look', power: 0.85, w: 2, line: '{e} looks at {t} condescendingly. {t}\'s self-esteem took a hit!' }] },
-  moth: { name: 'Lil\' Mothling', hp: 62, atk: 12, def: 3, spd: 14, shield: 2, weak: ['sling', 'sass'], exp: 12,
+  moth: { name: 'Lil\' Mothling', hp: 150, atk: 12, def: 3, spd: 14, shield: 3, weak: ['sling', 'sass'], exp: 12,
     moves: [{ name: 'Dust Puff', power: 1.0, w: 3 }, { name: 'Flutter', power: 0, w: 1, line: '{e} flutters menacingly. It isn\'t very menacing.' }] },
-  gerald: { name: 'Gerald', hp: 950, atk: 17, def: 8, spd: 11, shield: 6, weak: ['broom', 'sass'], absorb: 'fire', boss: true, exp: 120,
-    moves: [{ name: 'Wing Slap', power: 1.25, w: 3 }, { name: 'Lamp Hug', heal: 45, w: 1, line: '{e} hugs himself like a lamp. Recovered {n} HP!' }, { name: 'Monologue', power: 0, w: 1, line: '{e} talks about his feelings. Nobody knows what to do with their hands.' }] },
+  gerald: { name: 'Gerald', hp: 1500, atk: 17, def: 8, spd: 11, shield: 7, weak: ['broom', 'sass'], absorb: 'fire', boss: true, exp: 120,
+    moves: [{ name: 'Wing Slap', power: 1.2, w: 3 }, { name: 'Lamp Hug', heal: 90, w: 1, line: '{e} hugs himself like a lamp. Recovered {n} HP!' }, { name: 'Monologue', power: 0, w: 1, line: '{e} talks about his feelings. Nobody knows what to do with their hands.' }] },
 };
 
 let E = null;
@@ -63,8 +64,9 @@ function stage(b) {
     e.actor = pool[used] || a;
     e.saved = { x: e.actor.x, z: e.actor.z, lift: e.actor.lift, visible: e.actor.visible, ground: e.actor.ground };
     const big = e.kind === 'gerald';
-    e.hx = big ? cx - 3.3 : cx - (n === 1 ? 3.0 : 2.0 + (n - 1 - i) * 2.5);
-    e.hz = big ? cz - 0.9 : cz + (n === 1 ? -0.1 : (i % 2 ? 0.55 : -0.55));
+    // a staggered diagonal: the back monster up-left, the front one down-right, never overlapping
+    e.hx = big ? cx - 3.0 : cx - (n === 1 ? 2.4 : (i % 2 ? 1.5 : 4.0));
+    e.hz = big ? cz - 0.9 : cz + (n === 1 ? 0 : (i % 2 ? 0.75 : -0.95));
     const A = e.actor;
     A.ground = E.ground; A.x = e.hx; A.z = e.hz; A.visible = true; A.dir = 'right'; A.U.uFade.value = 0; A.tilt = 0;
     A.lift = e.kind === 'moth' ? 0.6 : big ? 0.45 : 0;
@@ -72,7 +74,8 @@ function stage(b) {
   b.active.forEach((p, i) => {
     const A = p.id === 'pip' ? E.pip : E.moss;
     p.actor = A;
-    p.hx = cx + 2.6 + i * 0.95; p.hz = cz - 0.45 + i * 0.95;
+    // Pip in front (nearest the camera), Moss behind and to the right: Octopath's stepped party line
+    p.hx = cx + 2.2 + i * 1.55; p.hz = cz + 0.55 - i * 1.15;
     A.x = p.hx; A.z = p.hz; A.dir = 'left'; A.visible = true; A.tilt = 0; A.ox = A.oz = 0;
   });
 }
@@ -103,9 +106,9 @@ export function startBattle(kinds, opts = {}) {
     pA.pos.set(b.cx - 2.8, gy + 2.4, b.cz + 1.4); pA.color.set(opts.boss ? 0xff8c4d : 0x8c80ff); pA.intensity = opts.boss ? 5 : 3.5;
     pB.pos.set(b.cx + 3.0, gy + 2.2, b.cz + 1.6); pB.intensity = 3.5;
     // camera: battle framing round the stage centre
-    const C = opts.boss ? { ...CAMS.battle, dist: 17, lift: -0.15 } : CAMS.battle;
-    Object.assign(camState, { tx: b.cx, ty: gy + C.lift, tz: b.cz, wantDist: C.dist, wantPitch: C.pitch, range: C.range, aperture: C.aperture, lock: true, focusOverride: null });
-    camState.x = camState.tx; camState.y = camState.ty; camState.z = camState.tz; camState.dist = C.dist; camState.pitch = C.pitch;
+    const C = opts.boss ? { ...CAMS.battle, dist: 16.5, lift: 0.6, pitch: 15 } : CAMS.battle;
+    Object.assign(camState, { tx: b.cx + 0.1, ty: gy + C.lift, tz: b.cz, wantDist: C.dist, wantPitch: C.pitch, wantYaw: C.yaw, fov: C.fov, range: C.range, aperture: C.aperture, lock: true, focusOverride: null });
+    Object.assign(camState, { x: camState.tx, y: camState.ty, z: camState.tz, dist: C.dist, pitch: C.pitch, yaw: C.yaw, fovNow: C.fov });
     G.mode = 'battle';
     audio.play(opts.boss ? 'boss' : 'battle');
     runBattle().then(r => {
@@ -135,6 +138,8 @@ async function runBattle() {
     }
     const actors = [...aliveParty(), ...aliveEnemies()].map(a => ({ a, s: a.spd + Math.random() * 4 }));
     actors.sort((x, y) => y.s - x.s);
+    // the tutorial lets Pip (who has the shrub's weaknesses) open the fight
+    if (b.opts.tutorial && b.round === 1) actors.sort((x, y) => (y.a.id === 'pip') - (x.a.id === 'pip'));
     b.order = actors.map(x => x.a);
     for (let oi = 0; oi < b.order.length; oi++) {
       const a = b.order[oi];
@@ -168,7 +173,8 @@ async function battleTutorial() {
   await say('Moss', 'Every monster has weak spots. Those little boxes under it. Hit a weakness and its shield number goes down.');
   await say('Moss', 'Get the shield to zero and it BREAKS. Broken monsters skip their turn and take double damage. I didn\'t name it.');
   await say('Moss', 'You also build Boost Points every turn. Tap BOOST (or press E) before you act to spend them on extra hits or stronger skills.');
-  await say('Moss', 'Shrubs hate brooms and fire. Shrubs hate everything, honestly.');
+  await say('Moss', 'Shrubs hate brooms and fire. That\'s you, Pip: your Broom, or Flicker from Skills. Shrubs hate everything, honestly.');
+  await say('Moss', 'My slingshot just annoys it. I\'ll do damage while you break it. Then we both hit it while it\'s dizzy.');
 }
 
 // ---------- player input ----------
@@ -303,6 +309,7 @@ async function hitEnemy(a, e, power, stat, type, boostMul) {
         sfx('break');
         breakShards(e);
         G.stats.breaks++;
+        if (e.telegraph) { e.telegraph = false; e.fizzled = 1.6; pop(e.x, e.top - 18, 'BIG FLAP CANCELLED', '#9ad0ff'); }
       }
     } else sfx('hit');
   } else {
@@ -650,7 +657,9 @@ function drawBattleUI() {
     const big = e.kind === 'gerald';
     // with two monsters the back one's info sits above its head so the labels never collide
     const up = b.enemies.length > 1 && b.enemies.indexOf(e) % 2 === 0;
-    const x = e.x * u, y = (up ? e.top - 30 : e.y + 5) * u;
+    // kept clear of the turn-order chips and the message banner at the top
+    const minY = 40 + safe.t * DPR / u;
+    const x = e.x * u, y = (up ? Math.max(minY, e.top - 30) : Math.min(e.y + 5, V.VH - 70)) * u;
     text(e.name, x, y, 6.5 * u, UIC.text, 'center', 700);
     const bw = (big ? 70 : 42) * u;
     bar(x - bw / 2, y + 9 * u, bw, 2.5 * u, e.hp / e.maxHp, e.broken ? '#ffb050' : '#ff7a8a');
@@ -667,7 +676,8 @@ function drawBattleUI() {
         if (k === 'absorb') { D.strokeStyle = '#ff6a3a'; D.lineWidth = u; D.beginPath(); D.moveTo(ix, iy); D.lineTo(ix + 9 * u, iy + 9 * u); D.stroke(); }
       } else D.drawImage(ICONS.q, ix, iy, 9 * u, 9 * u);
     });
-    if (e.broken) text('BREAK', x, (up ? e.top - 42 : e.top - 16) * u, 8 * u, '#ffd060', 'center', 700);
+    if (e.broken) text('BREAK', x, (up ? Math.max(minY - 11, e.top - 42) : e.top - 16) * u, 8 * u, '#ffd060', 'center', 700);
+    if (e.telegraph) text('WINDING UP!', x, Math.max(minY - 11, e.top - 14) * u, 7 * u, '#ff9a6a', 'center', 700);
   }
   // turn order
   const order = b.order.filter(a => a.hp > 0 && a.alive !== false);
@@ -742,8 +752,10 @@ function drawBattleUI() {
       if (sel) text(sel.desc + (m.stage === 'skill' && b.boost ? `  Boost ×${b.boost + 1}` : ''), cx + 8 * u, ly + lh - 14 * u, 5.5 * u, UIC.dim);
       backButton(cx + lw + 6 * u, H - 24 * u - safe.b * DPR, () => { if (G.battle.menu === m) { m.stage = 'cmd'; sfx('back'); } });
     }
-    // boost button
-    const bx = px + 22 * u, by = py - 22 * u, br = 15 * u;
+    // boost button: docked to the party panel, level with the acting character's row
+    const ai = Math.max(0, b.active.indexOf(a));
+    const br = 14 * u, bx = px - br - 5 * u, by = py + 6 * u + ai * 22 * u + 8 * u;
+    D.fillStyle = 'rgba(122,216,255,0.25)'; D.fillRect(bx + br, by - 0.5 * u, 6 * u, u);
     const can = b.bp[a.id] > 0;
     const pulse = b.boost ? 1 + Math.sin(G.t * 10) * 0.05 : 1;
     const gg = D.createRadialGradient(bx - br * 0.3, by - br * 0.3, br * 0.1, bx, by, br * pulse);

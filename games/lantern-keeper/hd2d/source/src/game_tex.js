@@ -6,7 +6,8 @@ import * as THREE from 'three';
 import { image, spriteTex } from './assets.js';
 import {
   PB, hex, mixc, dk, lt, vol, hash2, C, mk,
-  makeChar, makeDog, makeCat, makeLyingGrandpa, makeRock, makeMushrooms, makeStump, makeOldLamp, makeIcons,
+  makeChar, makeDog, makeCat, makeLyingGrandpa, makeIcons,
+  makeMothPX, makeShrubPX, makeBoulderPX, makeStumpPX, makeMushPX, makeOldLampPX, makeChibiPX, makeDogPX, makeCatPX, makeLyingGrandpaPX, makeLanternPX,
 } from './game_art.js';
 
 const FRAMES = new Map();     // key -> { tex, w, h, canvas, emis }
@@ -182,31 +183,41 @@ export function makeShrubHD(sc) {
 export const CHAR_LO = {};
 export const PORTRAIT = {};
 export function buildGameTextures() {
+  window.__LKFRAME = frameCanvas;   // debug: sprite sheet captures
   makeIcons();
-  // Gerald (boss) and the forest monsters, drawn at scene density
-  const ger = makeMothHD(true, 4);
+  // Gerald (boss) and the forest monsters: native pixel art at the cast's ~42 px/m
+  const ger = makeMothPX(true);
   ger.frames.forEach((c, i) => registerCanvas('gerald_' + i, c, ger.emis[i]));
-  const mo = makeMothHD(false, 1.3);
+  const mo = makeMothPX(false);
   mo.frames.forEach((c, i) => registerCanvas('mothling_' + i, c));
-  const sh = makeShrubHD(1.7);
+  const sh = makeShrubPX();
   sh.frames.forEach((c, i) => registerCanvas('shrub_' + i, c));
   // side characters that have no HD art: the original generators, EPX-doubled
   CHAR_LO.odo = makeChar({ hairStyle: 'bald', hair: hex('#e8e4ea'), beard: hex('#eeeaf2'), shirt: hex('#6a8a5a'), pants: hex('#5a4a6a'), glasses: hex('#3a3040') });
   CHAR_LO.fenwick = makeChar({ hair: hex('#4a4a4a'), hat: 'cap', hatColor: hex('#4a6a9a'), shirt: hex('#a88a5a'), pants: hex('#5a5a6a'), mustache: hex('#4a4a4a') });
   CHAR_LO.glen = makeChar({ hair: hex('#7a5a3a'), hat: 'cap', hatColor: hex('#4a8a6a'), shirt: hex('#d0b070'), pants: hex('#4a5a7a'), beard: hex('#7a5a3a') });
+  // their walking-world sprites, redrawn natively at Pip's scale
+  const NPCX = {
+    fenwick: { hair: '#8a8a92', hat: 'cap', hatColor: '#4a6a9a', shirt: '#a88a5a', pants: '#5a5a6a', mustache: '#a8a8b4', braces: '#6a3a2a', boots: '#4a3024' },
+    glen: { hair: '#7a5a3a', hat: 'bucket', hatColor: '#4a8a6a', band: '#d8b04a', shirt: '#e0b84a', pants: '#4a5a7a', beard: '#8a6a44', boots: '#3a4a5a', rod: true },
+  };
   for (const id of ['fenwick', 'glen']) {
-    for (const d of ['down', 'left', 'right', 'up']) registerCanvas(`${id}_${d}`, epx(CHAR_LO[id].frames[d][0]));
+    for (const d of ['down', 'right', 'up']) registerCanvas(`${id}_${d}`, makeChibiPX(NPCX[id], d));
+    const r = frameCanvas(`${id}_right`), [c, x] = mk(r.width, r.height);
+    x.translate(r.width, 0); x.scale(-1, 1); x.drawImage(r, 0, 0);
+    registerCanvas(`${id}_left`, c);
   }
-  registerCanvas('odo_lying', epx(makeLyingGrandpa()));
-  const dog = makeDog(hex('#d8a060'));
-  dog.forEach((c, i) => registerCanvas('dog_' + i, epx(c)));
-  const cat = makeCat(hex('#5a5468'));
-  cat.forEach((c, i) => registerCanvas('cat_' + i, epx(c)));
-  // forest dressing
-  for (let i = 0; i < 6; i++) { const m = makeMushrooms(200 + i * 7); registerCanvas('mush_' + i, epx(m.c), epx(m.e)).col = m.col; }
-  for (let i = 0; i < 4; i++) registerCanvas('rock_' + i, epx(makeRock(300 + i * 11, 1.2 + (i % 2) * 0.5).c));
-  registerCanvas('stump', epx(makeStump(3).c));
-  registerCanvas('oldlamp', epx(makeOldLamp().c));
+  registerCanvas('odo_lying', makeLyingGrandpaPX());
+  makeDogPX('#d8a060').forEach((c, i) => registerCanvas('dog_' + i, c));
+  makeCatPX('#6a6478').forEach((c, i) => registerCanvas('cat_' + i, c));
+  // forest dressing, native at the props' 56 px/m
+  for (let i = 0; i < 6; i++) { const m = makeMushPX(200 + i * 7); registerCanvas('mush_' + i, m.c, m.e).col = m.col; }
+  const RS = [[52, 34], [40, 28], [64, 42], [30, 22], [46, 38], [72, 34]];
+  RS.forEach(([w, h], i) => registerCanvas('rock_' + i, makeBoulderPX(300 + i * 11, w, h)));
+  registerCanvas('stump', makeStumpPX(0.75));
+  registerCanvas('perch', makeStumpPX(1.45, true));
+  registerCanvas('oldlamp', makeOldLampPX());
+  for (let i = 0; i < 3; i++) { const l = makeLanternPX(70 + i * 13); registerCanvas('lantern_' + i, l.c, l.e); }
   // dialogue portraits (head and shoulders)
   PORTRAIT.odo = epx(CHAR_LO.odo.portrait); PORTRAIT.fenwick = epx(CHAR_LO.fenwick.portrait); PORTRAIT.glen = epx(CHAR_LO.glen.portrait);
   const crop = (name, y0, y1) => {
@@ -219,8 +230,9 @@ export function buildGameTextures() {
   PORTRAIT.mayor = crop('mayor', 0.02, 0.5); PORTRAIT.baker = crop('baker', 0.0, 0.5); PORTRAIT.barnaby = crop('guard', 0.03, 0.5);
   PORTRAIT.tobin = crop('kid', 0.0, 0.55); PORTRAIT.zuzu = crop('zuzu', 0.08, 0.55); PORTRAIT.wendell = crop('guard', 0.03, 0.5);
   {
-    const g = ger.frames[0], [c, x] = mk(Math.round(g.width * 0.5), Math.round(g.height * 0.5));
-    x.drawImage(g, -Math.round(g.width * 0.25), -Math.round(g.height * 0.04));
+    const g = ger.frames[0], w = Math.round(g.width * 0.42), h = Math.round(w * 0.9);
+    const [c, x] = mk(w, h);
+    x.drawImage(g, -Math.round((g.width - w) / 2), -Math.round(g.height * 0.2));
     PORTRAIT.gerald = c;
   }
 }

@@ -16,6 +16,8 @@ export const G = {
   shake: 0, flash: 0,
   titleT: 0, endingT: 0,
   hint: '',
+  objective: '',              // current goal, shown in the field HUD and the pause menu
+  lastDlg: null,              // the line just spoken: stays on screen under a choice box
 };
 
 export const party = [
@@ -44,7 +46,7 @@ export function resetParty() {
   Object.assign(party[1], { lv: 3, exp: 0, hp: 96, maxHp: 96, sp: 48, maxSp: 48, atk: 12, mag: 17, def: 6, spd: 13, joined: false });
   Object.assign(inventory, { cookie: 0, tea: 1, popper: 1 });
   for (const k in G.flags) delete G.flags[k];
-  G.stats.wins = 0; G.stats.breaks = 0;
+  G.stats.wins = 0; G.stats.breaks = 0; G.objective = ''; G.lastDlg = null;
 }
 
 // ---------- timers & script helpers ----------
@@ -58,11 +60,12 @@ export function clearTimers() { timers.length = 0; }
 export function blocking() { return !!(G.dlg || G.choiceBox || G.menuOpen || G.scriptBusy); }
 
 export function say(name, text) {
-  return new Promise(res => { G.dlg = { name, text, shown: 0, lines: null, res, t: 0 }; });
+  return new Promise(res => { G.dlg = { name, text, shown: 0, lines: null, res, t: 0 }; G.lastDlg = { name, text, t: G.t }; });
 }
 export const narrate = s => say(null, s);
 export function choose(opts, prompt) {
-  return new Promise(res => { G.choiceBox = { opts, sel: 0, res, prompt, t: 0 }; sfx('move'); });
+  const q = G.lastDlg && G.t - G.lastDlg.t < 60 ? G.lastDlg : null;
+  return new Promise(res => { G.choiceBox = { opts, sel: 0, res, prompt, t: 0, q }; sfx('move'); });
 }
 export function toast(str, col = '#ffd75a') { G.toasts.push({ str, t: 0, col }); }
 export function fadeTo(a, dur = 0.6, col = '#05040c') {

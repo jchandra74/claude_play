@@ -33,7 +33,7 @@ const URL_LANTERN = (() => {
   } catch (e) { return null; }
 })();
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-const POOL_MAX = quality.name === 'high' ? 32 : quality.name === 'med' ? 22 : 14;
+const POOL_MAX = quality.name === 'high' ? 32 : quality.name === 'med' ? 22 : 16;
 
 // ---------- analytic pool lights (patched into the standard lighting chunk) ----------
 const poolU = {
@@ -147,14 +147,16 @@ ${POOL_SUM}
 function hookMaterial(m) {
   if (!m || !m.isMeshStandardMaterial || m.userData.poolHooked) return;
   m.userData.poolHooked = true;
-  const perVertex = m.alphaTest > 0;
+  const perVertex = m.alphaTest > 0 && !m.userData.poolPixel;
   const prev = m.onBeforeCompile;
   const prevKey = m.customProgramCacheKey();
   // foliage keeps a little more of its green under the moon and gets a moon rim
   const leafy = /leafclump/.test(prevKey) || /tuft|grass|bush|pine|oak/.test(m.map && m.map.name || '');
   const leafDefs = /leafclump/.test(prevKey) ? '#define MOON_RIM\n#define MOON_KD 0.6\n#define MOON_KI 0.7\n' : leafy ? '#define MOON_KD 0.7\n#define MOON_KI 0.78\n' : '';
+  const actor = /^actor-rim/.test(prevKey);
   m.onBeforeCompile = function (sh, r) {
     prev.call(this, sh, r);
+    if (actor) charPop(sh);
     if (leafDefs) sh.fragmentShader = leafDefs + sh.fragmentShader;
     sh.uniforms.uPoolPos = poolU.uPoolPos;
     sh.uniforms.uPoolCol = poolU.uPoolCol;
@@ -167,6 +169,37 @@ function hookMaterial(m) {
     }
   };
   m.customProgramCacheKey = () => prevKey + (perVertex ? '|poolv' : '|pool') + (leafDefs ? '|leaf' + leafDefs.length : '');
+}
+
+// ---------- characters must always read (game actors: Pip, Moss, NPCs, monsters) ----------
+// Octopath keeps its sprites the crispest, best-lit thing on screen even in the darkest map:
+//  - a cool "moon key" floor: no pixel of a character falls below its own albedo under a soft
+//    blue-white key, so a dark-clad figure never sinks into the blue-black ground;
+//  - a pale moon rim round the whole silhouette (outline-adjacent texels) that separates the sprite
+//    from what is behind it;
+//  - a little extra saturation so the costume colours carry at phone size.
+// Scales with uCharPop (lifted while the town is dark, eased off once the Great Lantern is lit).
+export const charPopU = { value: 1 };
+const CHAR_POP = `{
+  vec3 cb = diffuseColor.rgb;
+  float cpk = uCharPop;
+  vec3 flo = cb * vec3(0.26, 0.31, 0.42) * cpk;
+  outgoingLight = max(outgoingLight, flo) + cb * vec3(0.05, 0.065, 0.09) * cpk;
+  float ce = 0.0;
+  ce = max(ce, step(texture2D(map, vMapUv + vec2(2.0 * uTexel.x, 0.0)).a, 0.5));
+  ce = max(ce, step(texture2D(map, vMapUv - vec2(2.0 * uTexel.x, 0.0)).a, 0.5));
+  ce = max(ce, step(texture2D(map, vMapUv + vec2(0.0, 2.0 * uTexel.y)).a, 0.5));
+  float cbl = dot(cb, vec3(0.3, 0.59, 0.11));
+  outgoingLight += vec3(0.075, 0.13, 0.24) * ce * (0.4 + cbl) * cpk;
+  float col = dot(outgoingLight, vec3(0.2126, 0.7152, 0.0722));
+  outgoingLight = max(mix(vec3(col), outgoingLight, 1.0 + 0.15 * cpk), 0.0);
+}
+#include <opaque_fragment>`;
+function charPop(sh) {
+  sh.uniforms.uCharPop = charPopU;
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform float uCharPop;')
+    .replace('#include <opaque_fragment>', CHAR_POP);
 }
 
 // ---------- glow-from-the-glass shading for the light-source sprites ----------
@@ -310,7 +343,7 @@ export function buildLighting(ctx) {
   if (scene.fog) { scene.fog.color.setRGB(0.03, 0.075, 0.15); scene.fog.density = 0.0072; }
 
   // moon: cool, dim, from the moon's direction in the sky (behind-left), rims and casts long shadows
-  const moon = new THREE.DirectionalLight(MOON_COLOR, 0.62);
+  const moon = new THREE.DirectionalLight(MOON_COLOR, 0.8);
   moon.position.copy(MOON_DIR).multiplyScalar(45).add(new THREE.Vector3(0, 0, -2));
   moon.target.position.set(0, 0, -2);
   moon.castShadow = true;
@@ -323,8 +356,17 @@ export function buildLighting(ctx) {
   scene.add(moon, moon.target);
   ctx.moon = moon;
 
+  // sky key: the moon sits behind the town, so every facade the camera sees would be lit by flat
+  // ambient alone (one navy value everywhere). A cool, unshadowed sky light from high front-left
+  // gives walls, roofs and props a lit side and a shadow side, the way Octopath's night maps keep
+  // form and value range under moonlight.
+  const skyKey = new THREE.DirectionalLight(MOON_COLOR, 0.5);
+  skyKey.position.set(-0.55, 0.75, 0.6).multiplyScalar(40);
+  skyKey.target.position.set(0, 0, 0);
+  scene.add(skyKey, skyKey.target);
+  ctx.skyKey = skyKey;
   // ambient: deep blue-teal sky, near-black ground bounce
-  const hemi = new THREE.HemisphereLight(new THREE.Color(0.14, 0.3, 0.6), new THREE.Color(0.03, 0.05, 0.09), 1.55);
+  const hemi = new THREE.HemisphereLight(new THREE.Color(0.14, 0.3, 0.6), new THREE.Color(0.03, 0.05, 0.09), 1.0);
   scene.add(hemi);
   ctx.hemi = hemi;
   const FX = ctx.lanternFx = { lamps: [], lanternPools: [], lanternHalos: [], bulbs: null, chars: [] };
@@ -374,10 +416,10 @@ export function buildLighting(ctx) {
     // glow round the door frame only, plus spill onto the step / path from just inside the doorway
     const p = new THREE.Vector3(h.doorX, 1.3, h.d / 2 + 0.45);
     h.group.localToWorld(p);
-    addPool(ctx, p, WINDOW_COLOR, 2.6, 2.2, 1.6, 2);
+    addPool(ctx, p, WINDOW_COLOR, 3.2, 2.2, 1.6, 2);
     const q = new THREE.Vector3(h.doorX, 1.1, h.d / 2 - 0.08);
     h.group.localToWorld(q);
-    addPool(ctx, q, WINDOW_COLOR, 5, 3.4, 0.8, 2);
+    addPool(ctx, q, WINDOW_COLOR, 9, 4.2, 0.8, 2);
   }
 
   // ---- windows (registered by buildings): a small halo on each, a tight warm pool hugging each
@@ -406,16 +448,21 @@ export function buildLighting(ctx) {
     const q = w.sum.divideScalar(w.k).addScaledVector(w.n, -0.08);
     q.y = Math.min(w.minY, 1.5);
     const span = w.maxX - w.minX;
-    addPool(ctx, q, WINDOW_COLOR, 2.0 * w.s / Math.sqrt(w.k), 2.6 + span * 0.35, 1.0 / (1 + span * 0.25), 4);
+    // (prio 2.5: on the small phone pool budget the cobble spill outranks the per-window wall glow;
+    //  it is the light that tells the player where the street is while the Great Lantern is out)
+    addPool(ctx, q, WINDOW_COLOR, 5.2 * w.s / Math.sqrt(w.k), 3.3 + span * 0.42, 0.8 / (1 + span * 0.25), 2.5);
   }
 
   // keep the most important pools if the quality budget is small
   ctx.pools.sort((a, b) => a.prio - b.prio || b.weight - a.weight);
 
   // hook every standard material in the scene to the pool uniforms
+  // (large alpha-tested sprites such as oak trunks evaluate per pixel: a per-vertex pool on a 4 m
+  //  sprite interpolates one hot corner across the whole quad and the trunk glows like a lamp)
   scene.traverse(o => {
     if (!o.material) return;
-    (Array.isArray(o.material) ? o.material : [o.material]).forEach(hookMaterial);
+    const big = o.userData.size && Math.max(o.userData.size[0], o.userData.size[1]) > 1.9;
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (big && m && !m.userData.poolHooked) m.userData.poolPixel = true; hookMaterial(m); });
   });
 
   // light-source sprites glow from the glass outward
@@ -501,7 +548,7 @@ function applyLevel(ctx, t) {
   let lampSum = 0, lampN = 0;
   for (const L of FX.lamps) {
     const on = sstep(L.thr, L.thr + 0.14, k);
-    const g = 0.14 * gutter(t, L.seed);
+    const g = 0.07 + 0.17 * gutter(t, L.seed);
     // ignition: a brief over-bright catch as the lamp lights
     const catchK = 1 + 0.35 * Math.max(0, 1 - Math.abs((k - L.thr - 0.07) / 0.07)) * (on > 0 && on < 1 ? 1 : 0);
     const lv = Math.min(1.35, (g + (1 - g) * on) * catchK);
@@ -518,6 +565,7 @@ function applyLevel(ctx, t) {
   if (ctx.moon) ctx.moon.intensity = FX.moonBase * (1 + 0.45 * (1 - kl));
   if (ctx.hemi) ctx.hemi.intensity = FX.hemiBase * (1 + 0.25 * (1 - kl));
   for (const c of FX.chars) applyChar(c, k);
+  charPopU.value = 1 - 0.45 * kl;
   if (ctx.daisWarm) ctx.daisWarm.value.copy(ctx.daisWarm.userData.base).multiplyScalar(kl);
 }
 
@@ -548,6 +596,34 @@ export function halo(ctx, pos, color, size, intensity, own = false) {
   return s;
 }
 
+// Lights carried by the game (prio -2: Pip's hand lantern, Gerald's ember) and battle stage lights
+// (prio -1) are registered by game.js / game_battle.js with conservative intensities; they are the
+// key lights of every gameplay frame, so they get a gain here, and each carried light also gets a
+// small glow sprite at the flame and a volumetric haze cone (read by post.js).
+const BIG_CARRY_GAIN = 1.6, CARRY_GAIN = 9, CARRY_R = 1.75, CARRY_LIFT = 1.1, STAGE_GAIN = 4.0, STAGE_R = 1.3;
+// battle stage: while the stage pools are lit the surrounding world drops back (moon / sky ambient
+// down, heavier vignette in post.js) so the fight sits in its own pool of light
+export const stageU = { value: 0 };
+export const carryHaze = [];
+const carried = new Map();
+function carriedFx(ctx, pl, k) {
+  let fx = carried.get(pl);
+  if (!fx) {
+    const small = pl.radius < 4.5;
+    fx = { small, haze: { pos: pl.pos, color: pl.color.clone(), strength: 0, base: small ? 0.32 : 0.4 } };
+    if (small) {
+      fx.halos = [halo(ctx, pl.pos, pl.color, 1.15, 0.5, true), halo(ctx, pl.pos, new THREE.Color(1, 0.85, 0.6), 0.34, 1.3, true)];
+      for (const h of fx.halos) h.renderOrder = 11;
+    }
+    carried.set(pl, fx);
+    carryHaze.push(fx.haze);
+  }
+  const on = Math.min(1, k / (pl.intensity > 0 ? pl.intensity * (fx.small ? CARRY_GAIN : BIG_CARRY_GAIN) : 1));
+  fx.haze.strength = k > 1e-3 ? fx.haze.base * on : 0;
+  if (fx.halos) for (const h of fx.halos) { h.visible = k > 1e-3; h.position.copy(pl.pos); h.material.color.copy(h.material.userData.base).multiplyScalar(on); }
+}
+
+const _cand = [], _sorted = [], byScore = (a, b) => b.s - a.s;
 const _v = new THREE.Vector3(), _m = new THREE.Matrix4(), _frustum = new THREE.Frustum(), _sphere = new THREE.Sphere();
 export function updateLighting(ctx, t) {
   LV.t = t;
@@ -561,17 +637,47 @@ export function updateLighting(ctx, t) {
   cam.updateMatrixWorld();
   const P = poolU.uPoolPos.value, C = poolU.uPoolCol.value;
   _frustum.setFromProjectionMatrix(_m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
-  let n = 0;
+  let n = 0, stageOn = 0;
+  for (const pl of ctx.pools) if (pl.prio === -1 && pl.intensity > 0) stageOn = 1;
+  stageU.value += (stageOn - stageU.value) * (stageOn ? 0.25 : 0.5);
+  if (stageU.value < 1e-3) stageU.value = 0;
+  if (ctx.moon && ctx.lanternFx) { ctx.moon.intensity *= 1 - 0.3 * stageU.value; ctx.hemi.intensity *= 1 - 0.4 * stageU.value; }
+  // Pick the POOL_MAX pools that matter most in this view: carried / stage lights always, then by
+  // visible strength (intensity x radius, nearer first). A static priority order would spend the
+  // small phone budget on guttering street lamps while the lantern is out and drop the window spill.
+  let nc = 0;
   for (const pl of ctx.pools) {
-    if (n >= POOL_MAX) break;
-    _sphere.center.copy(pl.pos); _sphere.radius = pl.radius;
+    let k = pl.intensity * (pl.mul ?? 1), rad = pl.radius;
+    if (pl.prio === -2) { const sm = pl.radius < 4.5; k *= sm ? CARRY_GAIN : BIG_CARRY_GAIN; rad *= sm ? CARRY_R : 1.15; carriedFx(ctx, pl, k); }
+    else if (pl.prio === -1) { k *= STAGE_GAIN * (pl.color.b > pl.color.r ? 1.8 : 1); rad *= STAGE_R; }
+    if (k <= 1e-4) continue;
+    _sphere.center.copy(pl.pos); _sphere.radius = rad;
     if (!_frustum.intersectsSphere(_sphere)) continue;
     _v.copy(pl.pos).applyMatrix4(cam.matrixWorldInverse);
-    P[n].set(_v.x, _v.y, _v.z, pl.radius * pl.radius);
-    let k = pl.intensity * (pl.mul ?? 1);
-    if (k <= 1e-4) continue;
+    const c = _cand[nc] || (_cand[nc] = { pl: null, k: 0, rad: 0, s: 0 });
+    c.pl = pl; c.k = k; c.rad = rad;
+    c.s = pl.prio < 0 ? 1e9 - nc : k * rad / ((1 + Math.max(0, -_v.z) * 0.035) * (1 + 0.1 * pl.prio));
+    nc++;
+  }
+  _cand.length = Math.max(_cand.length, nc);
+  const cs = _sorted; cs.length = nc;
+  for (let i = 0; i < nc; i++) cs[i] = _cand[i];
+  if (nc > POOL_MAX) cs.sort(byScore);
+  for (let i = 0; i < nc && n < POOL_MAX; i++) {
+    const { pl, rad } = cs[i];
+    let k = cs[i].k;
+    const carry = pl.prio === -2 && pl.radius < 4.5;
+    const core = carry ? pl.core * 0.35 : pl.core;
+    // a hand lantern lights from above the hand (a broad, soft pool that also keys the faces nearby)
+    _v.copy(pl.pos); if (carry) _v.y += CARRY_LIFT;
+    _v.applyMatrix4(cam.matrixWorldInverse);
+    P[n].set(_v.x, _v.y, _v.z, rad * rad);
     if (pl.seed !== null) k *= 1 + 0.06 * (Math.sin(t * 7.1 + pl.seed * 13) * 0.6 + Math.sin(t * 12.3 + pl.seed * 3) * 0.4);
-    C[n].set(pl.color.r * k, pl.color.g * k, pl.color.b * k, pl.core);
+    let cr = pl.color.r, cg = pl.color.g, cb = pl.color.b;
+    // the monster side of a battle stage: a pale moon-cyan spot (a violet light on green grass and
+    // shrubs reads as nothing); the party side keeps its warm lantern colour -> warm/cool stage
+    if (pl.prio === -1 && cb > cr) { cr = cr * 0.35 + 0.4; cg = cg * 0.35 + 0.56; cb = cb * 0.35 + 0.65; }
+    C[n].set(cr * k, cg * k, cb * k, core);
     n++;
   }
   poolU.uPoolCount.value = n;
