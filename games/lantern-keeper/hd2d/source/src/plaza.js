@@ -650,7 +650,7 @@ export function buildPlaza(ctx) {
     [toW(st1, -1.35, 2.4, -0.65), westEave, 0.6],
     [toW(st2, 1.15, 2.1, 0.65), bakeryEave, 0.45],
     [crown, new THREE.Vector3(-5.3, 2.35, -5.2), 0.5],
-    [crown, new THREE.Vector3(5.6, 2.35, -3.6), 0.5],
+    [crown, new THREE.Vector3(6.3, 2.35, -3.7), 0.5],
     // foreground runs from the front lamps out to the ledge corner posts
     [new THREE.Vector3(-6.6, 2.4, 3.9), new THREE.Vector3(-10.6, 1 + 2.4, 1.6), 0.4],
     [new THREE.Vector3(3.7, 2.4, 3.3), new THREE.Vector3(12.4, 2.4, 0.9), 0.55],

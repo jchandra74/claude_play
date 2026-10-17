@@ -354,7 +354,9 @@ export function drawDialog() {
     D.globalAlpha = a;
     D.font = font(8 * u, 700);
     const w = D.measureText(t.str).width + 24 * u;
-    const y = 10 * u + i * 20 * u + safe.t * V.DPR - (1 - a) * 6 * u;
+    // below the objective pill, never over it
+    const y0 = G.mode === 'field' && G.objective ? 25 * u : 8 * u;
+    const y = y0 + i * 19 * u + safe.t * V.DPR - (1 - a) * 6 * u;
     panel((W - w) / 2, y, w, 16 * u, { r: 8 * u, noStuds: true });
     text(t.str, W / 2, y + 3.5 * u, 8 * u, t.col, 'center', 700);
     D.globalAlpha = 1;
@@ -503,7 +505,9 @@ export function drawMenu() {
     hits.push({ x: ox, y, w: ow, h: 16 * u, fn: () => { G.menuOpen.sel = i; it.fn(); } });
   });
   text(touch.ui ? 'Drag on the left to walk · A talk / confirm · B run · tap outside to close' : 'Arrows/WASD move · Z talk / confirm · X back · Shift run · C menu',
-    W / 2, py + ph + 8 * u, 6 * u, UIC.dim, 'center');
+    W / 2, py + ph + 6 * u, 6 * u, UIC.dim, 'center');
+  text(touch.ui ? 'Battle: tap BOOST before a command to spend Boost Points' : 'Battle: E or R boost up · Q boost down (before choosing a command)',
+    W / 2, py + ph + 15 * u, 6 * u, UIC.dim, 'center');
 }
 
 // ---------- title & ending ----------

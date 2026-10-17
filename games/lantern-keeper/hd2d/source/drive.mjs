@@ -115,32 +115,51 @@ export async function fight(page, opts = {}) {
     if (!b || b.menu !== 'cmd') { if (b && b.msg && log[log.length - 1] !== '* ' + b.msg) log.push('* ' + b.msg); await sleep(250); continue; }
     if (opts.onMenu && shots < (opts.maxShots || 1)) { await opts.onMenu(b); shots++; }
     const me = b.party.find(p => p.id === b.actor), foes = b.enemies.filter(e => e.alive);
-    const hurt = b.party.find(p => p.hp > 0 && p.hp < (p.id === 'pip' ? 45 : 38));
+    const maxHp = { pip: 999, moss: 999, ...(opts.maxHp || {}) };
+    const mh = await page.evaluate(() => Object.fromEntries(LK.party.map(p => [p.id, p.maxHp])));
+    const alive = b.party.filter(p => p.hp > 0);
+    const hurt = alive.filter(p => p.hp < mh[p.id] * 0.42).sort((x, y) => x.hp / mh[x.id] - y.hp / mh[y.id])[0];
     const keys = [];
-    const boost = (b.bp[b.actor] >= 3 && foes.some(f => f.kind === 'gerald')) ? 2 : (b.bp[b.actor] >= 2 && foes.some(f => f.broken)) ? 1 : 0;
-    for (let k = 0; k < boost; k++) keys.push('e');
+    const boss = foes.some(f => f.kind === 'gerald');
     let t = Math.max(0, foes.findIndex(f => f.broken));
-    if (hurt && s.inv.cookie > 0) {
-      const items = Object.keys(s.inv).filter(k => s.inv[k] > 0);
-      keys.length = 0; keys.push('ArrowDown', 'ArrowDown', 'z');
-      for (let k = 0; k < items.indexOf('cookie'); k++) keys.push('ArrowDown');
-      keys.push('z');
-      const ally = b.party.filter(p => p.hp > 0).findIndex(p => p.id === hurt.id);
+    const broken = foes.some(f => f.broken);
+    // boost: everything on a broken foe; on Gerald, enough extra hits to break him when close
+    let boost = 0;
+    if (broken) boost = Math.min(3, b.bp[b.actor]);
+    else if (boss && b.actor === 'pip' && foes[0].shield <= 1 + Math.min(3, b.bp[b.actor] - 1) && b.bp[b.actor] >= 2) boost = Math.min(3, Math.max(1, foes[0].shield - 1));
+    const items = Object.keys(s.inv).filter(k => s.inv[k] > 0);
+    const useItem = (key, ally) => { keys.length = 0; keys.push('ArrowDown', 'ArrowDown', 'z'); for (let k = 0; k < items.indexOf(key); k++) keys.push('ArrowDown'); keys.push('z'); if (ally !== undefined) { for (let k = 0; k < ally; k++) keys.push('ArrowDown'); keys.push('z'); } };
+    if (opts.careless) { keys.push('z'); for (let k = 0; k < t; k++) keys.push('ArrowRight'); keys.push('z'); log.push(`[${b.actor}] Attack (careless)`); }
+    else if (hurt && b.actor === 'pip' && me.sp >= 6 && !broken) {
+      keys.push('ArrowDown', 'z', 'ArrowDown', 'ArrowDown', 'z');
+      const ally = alive.findIndex(p => p.id === hurt.id);
       for (let k = 0; k < ally; k++) keys.push('ArrowDown');
       keys.push('z');
+      log.push(`[pip] Pep Talk -> ${hurt.id}`);
+    } else if (hurt && b.actor === 'moss' && hurt.id === 'moss' && me.sp >= 4 && !broken) {
+      keys.push('ArrowDown', 'z', 'ArrowDown', 'ArrowDown', 'z');
+      log.push('[moss] Dramatic Nap');
+    } else if (hurt && s.inv.cookie > 0 && !broken) {
+      useItem('cookie', alive.findIndex(p => p.id === hurt.id));
       log.push(`[${b.actor}] cookie -> ${hurt.id}`);
-    } else if (b.actor === 'pip') {
-      const shrub = foes.findIndex(f => f.kind === 'shrub' && !f.broken);
-      if (shrub >= 0 && me.sp >= 6) { keys.push('ArrowDown', 'z', 'z'); t = shrub; log.push('[pip] Flicker'); }
-      else { keys.push('z'); log.push('[pip] Attack'); }
-      for (let k = 0; k < t; k++) keys.push('ArrowRight');
-      keys.push('z');
+    } else if (b.actor === 'moss' && me.sp < 6 && s.inv.tea > 0 && !broken) {
+      useItem('tea', alive.findIndex(p => p.id === 'moss'));
+      log.push('[moss] tea');
     } else {
-      const sassy = foes.findIndex(f => (f.kind === 'moth' || f.kind === 'gerald'));
-      if (sassy >= 0 && me.sp >= 6 && !foes[t].broken) { keys.push('ArrowDown', 'z', 'z'); t = sassy; log.push('[moss] Withering Remark'); }
-      else if (foes.length > 1 && me.sp >= 8) { keys.push('ArrowDown', 'z', 'ArrowDown', 'z'); log.push('[moss] Pebble Storm'); t = -1; }
-      else { keys.push('z'); log.push('[moss] Attack'); }
-      if (t >= 0) { for (let k = 0; k < t; k++) keys.push('ArrowRight'); keys.push('z'); }
+      for (let k = 0; k < boost; k++) keys.push('e');
+      if (b.actor === 'pip') {
+        const shrub = foes.findIndex(f => f.kind === 'shrub' && !f.broken);
+        if (shrub >= 0 && me.sp >= 6) { keys.push('ArrowDown', 'z', 'z'); t = shrub; log.push('[pip] Flicker' + (boost ? ' B' + boost : '')); }
+        else { keys.push('z'); log.push('[pip] Attack' + (boost ? ' B' + boost : '')); }
+        for (let k = 0; k < t; k++) keys.push('ArrowRight');
+        keys.push('z');
+      } else {
+        const sassy = foes.findIndex(f => (f.kind === 'moth' || f.kind === 'gerald'));
+        if (sassy >= 0 && me.sp >= 6 && (!foes[t].broken || foes[t].kind !== 'shrub')) { keys.push('ArrowDown', 'z', 'z'); if (!foes[t].broken) t = sassy; log.push('[moss] Withering Remark' + (boost ? ' B' + boost : '')); }
+        else if (foes.length > 1 && me.sp >= 8) { keys.push('ArrowDown', 'z', 'ArrowDown', 'z'); log.push('[moss] Pebble Storm'); t = -1; }
+        else { keys.push('z'); log.push('[moss] Attack' + (boost ? ' B' + boost : '')); }
+        if (t >= 0) { for (let k = 0; k < t; k++) keys.push('ArrowRight'); keys.push('z'); }
+      }
     }
     for (const k of keys) { await press(page, k); await sleep(170); }
     await sleep(400);

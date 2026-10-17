@@ -21,5 +21,5 @@ export async function open(q = '', vp = { width: 844, height: 390 }, opts = {}) 
   return { browser, page, logs };
 }
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
-export async function shot(page, name) { fs.mkdirSync(path.join(root, 'shots'), { recursive: true }); await page.screenshot({ path: path.join(root, 'shots', name + '.png') }); console.log('shot', name); }
+export async function shot(page, name) { fs.mkdirSync(path.join(root, 'shots'), { recursive: true }); await page.screenshot({ path: path.join(root, 'shots', name + '.png'), timeout: 180000 }); console.log('shot', name); }
 export async function lk(page) { return page.evaluate(() => ({ mode: LK.mode, area: LK.area, dlg: LK.dlg, speaker: LK.speaker, busy: LK.busy, choice: LK.choice, player: LK.player, target: LK.target, fade: LK.fade, battle: LK.battleState, lantern: LK.lantern, flags: { ...LK.flags } })); }
