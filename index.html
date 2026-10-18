@@ -117,6 +117,7 @@
 
 <script>
   // Add new games here: folder under games/, plus cover image and blurb.
+  // Optional `path` points the card (link and cover) at a subfolder of games/ instead of the slug.
   const GAMES = [
     {
       slug: 'iron-comet',
@@ -127,10 +128,11 @@
     },
     {
       slug: 'lantern-keeper',
+      path: 'lantern-keeper/hd2d',
       title: 'The Lantern Keeper',
-      badge: 'DEMO',
-      tagline: 'A tiny comedic JRPG with HD-2D style lighting. Chase a Moth of Unusual Size into the Whisperwood and relight the Great Lantern. Landscape, touch d-pad.',
-      tags: ['JRPG', 'Turn-based', 'Break & Boost', 'Touch d-pad', 'Original music'],
+      badge: 'HD-2D DEMO',
+      tagline: 'A tiny comedic JRPG in HD-2D: pixel-art sprites in a lit 3D diorama with tilt-shift depth of field. Chase a Moth of Unusual Size into the Whisperwood and relight the Great Lantern. Landscape, touch d-pad.',
+      tags: ['JRPG', 'HD-2D', 'Turn-based', 'Break & Boost', 'Touch d-pad'],
     },
     {
       slug: 'neon-breaker',
@@ -146,12 +148,13 @@
   for (const g of GAMES) {
     const a = document.createElement('a');
     a.className = 'card';
-    a.href = `games/${g.slug}/`;
+    const dir = `games/${g.path || g.slug}/`;
+    a.href = dir;
     a.setAttribute('aria-label', `Play ${g.title}`);
     a.innerHTML = `
       <div class="cover">
         ${g.badge ? `<span class="badge">${g.badge}</span>` : ''}
-        <img src="games/${g.slug}/cover.jpg" alt="" loading="lazy" width="1280" height="720">
+        <img src="${dir}cover.jpg" alt="" loading="lazy" width="1280" height="720">
       </div>
       <div class="body">
         <h2 class="title"></h2>
