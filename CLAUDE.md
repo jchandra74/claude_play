@@ -8,6 +8,7 @@ A monorepo of single-file browser games, published to GitHub Pages straight from
 - `games/<slug>/index.html`: one game, one **self-contained** HTML file. Vanilla JS, no libraries, no network requests, no external assets. Audio is synthesised with WebAudio.
 - `games/<slug>/cover.jpg`: 1280x720 cover for the catalogue.
 - `games/lantern-keeper/hd2d/`: an HD-2D version of The Lantern Keeper demo (playable demo; the catalogue card links here via the entry's `path`, and the original 2D version stays at `games/lantern-keeper/`). It is the one exception to the no-libraries rule: it inlines three.js (still one self-contained file, no network requests) and uses image-generated pixel art. Its source and build scripts are in `hd2d/source/`.
+- `apps/room-scanner/`: an unrelated Android app (AR room scanner that exports to Blender), parked in this repo for now. Not a game: none of the game rules below apply to it. Start from its `DESIGN.md`.
 - `tools/pixel-lint.mjs`: quality checker for pixel-art games (Playwright + headless Chromium, both preinstalled).
 - `.claude/skills/pixel-art/`: the pixel-art quality bar (`SKILL.md`), a starter `template.html`, and the exemplar prompts.
 
