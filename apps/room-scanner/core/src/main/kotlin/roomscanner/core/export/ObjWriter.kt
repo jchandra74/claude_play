@@ -14,15 +14,21 @@ object ObjWriter {
                 sb.append(String.format(Locale.ROOT, "v %.5f %.5f %.5f\n", part.positions[3 * i], part.positions[3 * i + 1], part.positions[3 * i + 2]))
             }
             for (i in 0 until part.vertexCount) {
+                sb.append(String.format(Locale.ROOT, "vt %.5f %.5f\n", part.uvs[2 * i], part.uvs[2 * i + 1]))
+            }
+            for (i in 0 until part.vertexCount) {
                 sb.append(String.format(Locale.ROOT, "vn %.4f %.4f %.4f\n", part.normals[3 * i], part.normals[3 * i + 1], part.normals[3 * i + 2]))
             }
-            for (t in 0 until part.triangleCount) {
-                sb.append('f')
-                for (k in 0..2) {
-                    val v = base + part.indices[3 * t + k]
-                    sb.append(' ').append(v).append("//").append(v)
+            for (surface in part.surfaces) {
+                sb.append("usemtl ").append(surface.material).append('\n')
+                for (t in 0 until surface.indices.size / 3) {
+                    sb.append('f')
+                    for (k in 0..2) {
+                        val v = base + surface.indices[3 * t + k]
+                        sb.append(' ').append(v).append('/').append(v).append('/').append(v)
+                    }
+                    sb.append('\n')
                 }
-                sb.append('\n')
             }
             base += part.vertexCount
         }

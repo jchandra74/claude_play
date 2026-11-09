@@ -50,7 +50,7 @@ class ExportTest {
         for (a in g["accessors"]!!.jsonArray) {
             val acc = a.jsonObject
             val view = views[acc["bufferView"]!!.jsonPrimitive.int].jsonObject
-            val width = if (acc["type"]!!.jsonPrimitive.content == "VEC3") 12 else 4
+            val width = when (acc["type"]!!.jsonPrimitive.content) { "VEC3" -> 12; "VEC2" -> 8; else -> 4 }
             assertEquals(acc["count"]!!.jsonPrimitive.int * width, view["byteLength"]!!.jsonPrimitive.int)
             assertTrue(view["byteOffset"]!!.jsonPrimitive.int + view["byteLength"]!!.jsonPrimitive.int <= glb.bin.size)
             assertEquals(0, view["byteOffset"]!!.jsonPrimitive.int % 4)
@@ -64,6 +64,17 @@ class ExportTest {
         assertEquals("Sample flat", names[0])
         assertTrue(names.containsAll(listOf("LivingRoom", "Bedroom", "LivingRoom_Wall_01", "LivingRoom_Wall_06", "LivingRoom_Floor", "Bedroom_Wall_04", "Bedroom_Ceiling")))
         assertEquals(6 + 2 + 4 + 2, g["meshes"]!!.jsonArray.size)
+
+        // Every surface has a material of its own: face and body per wall, one per floor and ceiling.
+        val materials = g["materials"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+        assertEquals(10 * 2 + 4, materials.size)
+        assertEquals(materials.size, materials.toSet().size)
+        assertTrue(materials.containsAll(listOf("LivingRoom_Wall_03", "LivingRoom_Wall_03_Body", "Bedroom_Floor")))
+        val used = g["meshes"]!!.jsonArray.flatMap { m -> m.jsonObject["primitives"]!!.jsonArray.map { it.jsonObject["material"]!!.jsonPrimitive.int } }
+        assertEquals(materials.indices.toList(), used.sorted())
+        val wall = g["meshes"]!!.jsonArray.first { it.jsonObject["name"]!!.jsonPrimitive.content == "LivingRoom_Wall_03" }.jsonObject
+        assertEquals(2, wall["primitives"]!!.jsonArray.size)
+        assertTrue(wall["primitives"]!!.jsonArray.all { "TEXCOORD_0" in it.jsonObject["attributes"]!!.jsonObject })
 
         val bounded = g["accessors"]!!.jsonArray.map { it.jsonObject }.filter { "min" in it }
         fun lo(axis: Int) = bounded.minOf { it["min"]!!.jsonArray[axis].jsonPrimitive.float }
@@ -83,5 +94,7 @@ class ExportTest {
         assertEquals(14, lines.count { it.startsWith("o ") })
         assertEquals(mesh.rooms.sumOf { r -> r.parts.sumOf { it.triangleCount } }, lines.count { it.startsWith("f ") })
         assertEquals(mesh.rooms.sumOf { r -> r.parts.sumOf { it.vertexCount } }, lines.count { it.startsWith("v ") })
+        assertEquals(lines.count { it.startsWith("v ") }, lines.count { it.startsWith("vt ") })
+        assertEquals(24, lines.count { it.startsWith("usemtl ") })
     }
 }

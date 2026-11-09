@@ -28,6 +28,12 @@ Needs JDK 17 or newer.
 Then in Blender: File > Import > glTF 2.0, and pick `out/flat.glb`. It arrives upright, at 1:1
 scale in metres, with one named object per wall, floor and ceiling under a parent per room.
 
+Each object has its own material, so any surface can be recoloured without touching the others.
+Solid walls have two material slots: the room-side face, and `_Body` for the rest of the slab.
+UVs are at true scale (one unit per metre), so a tiling texture comes in at the right size.
+
+![Each wall tinted separately and a one-metre checker on the floors](docs/sample-materials.png)
+
 Options: `--mode shell` for interior surfaces only, `--thickness 0.15`, `--obj` to also write
 an OBJ. Plan files are JSON; `samples/two-rooms.json` shows the format.
 
@@ -35,7 +41,7 @@ To check an export against a real Blender without opening it:
 
 ```
 pip install bpy
-python3 tools/blender_check.py out/flat.glb --solid --render out/preview.png
+python3 tools/blender_check.py out/flat.glb --solid --render out/preview.png --demo
 ```
 
 ## Layout

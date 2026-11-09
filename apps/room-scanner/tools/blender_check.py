@@ -2,10 +2,13 @@
 
 Run with Blender's Python module (`pip install bpy`) or inside Blender:
 
-    python3 tools/blender_check.py model.glb [--solid] [--render preview.png]
+    python3 tools/blender_check.py model.glb [--solid] [--render preview.png] [--demo]
 
-Checks: the model is upright and at real-world scale, every object kept its name, the plan
-is attached, and (with --solid) every wall is a closed manifold once its vertices are merged.
+--demo recolours each wall and puts a one-metre checker on the floors before rendering, to show
+that surfaces are independent and textures arrive at true scale.
+
+Checks: the model is upright and at real-world scale, every object kept its name and has a UV
+map and its own material slots, the plan is attached, and (with --solid) every wall is a closed manifold once its vertices are merged.
 Exits non-zero on any failure.
 """
 import math
@@ -66,6 +69,12 @@ def main():
             failures.append(f"unexpected object name: {o.name}")
         if o.parent is None or o.parent.parent is None:
             failures.append(f"{o.name} is not under project > room")
+        if not o.data.uv_layers:
+            failures.append(f"{o.name} has no UV map")
+        slots = [m.name for m in o.data.materials]
+        wanted = [o.name, o.name + "_Body"] if solid and "_Wall_" in o.name else [o.name]
+        if slots != wanted:
+            failures.append(f"{o.name}: material slots {slots}, expected {wanted}")
         if solid and "_Wall_" in o.name:
             bm = bmesh.new()
             bm.from_mesh(o.data)
@@ -79,12 +88,34 @@ def main():
             bm.free()
 
     if render:
+        if "--demo" in args:
+            demo_materials(meshes)
         render_preview(render, lo, hi)
 
     for f in failures:
         print("FAIL:", f)
     print("OK" if not failures else f"{len(failures)} problem(s)")
     sys.exit(1 if failures else 0)
+
+
+def demo_materials(meshes):
+    import colorsys
+    walls = sorted((o for o in meshes if "_Wall_" in o.name), key=lambda o: o.name)
+    for i, o in enumerate(walls):
+        r, g, b = colorsys.hsv_to_rgb(i / len(walls), 0.55, 0.9)
+        bsdf = o.data.materials[0].node_tree.nodes["Principled BSDF"]
+        bsdf.inputs["Base Color"].default_value = (r, g, b, 1)
+    for o in meshes:
+        if not o.name.endswith("_Floor"):
+            continue
+        tree = o.data.materials[0].node_tree
+        uv = tree.nodes.new("ShaderNodeTexCoord")
+        checker = tree.nodes.new("ShaderNodeTexChecker")
+        checker.inputs["Scale"].default_value = 1.0  # one square per UV unit, so per metre
+        checker.inputs["Color1"].default_value = (0.75, 0.68, 0.55, 1)
+        checker.inputs["Color2"].default_value = (0.35, 0.28, 0.2, 1)
+        tree.links.new(uv.outputs["UV"], checker.inputs["Vector"])
+        tree.links.new(checker.outputs["Color"], tree.nodes["Principled BSDF"].inputs["Base Color"])
 
 
 def render_preview(path, lo, hi):

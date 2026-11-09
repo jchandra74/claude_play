@@ -4,13 +4,13 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import roomscanner.core.mesh.Category
 import roomscanner.core.mesh.ProjectMesh
+import roomscanner.core.mesh.RoomMesher
 import roomscanner.core.model.ExportMode
 import roomscanner.core.model.Project
 import java.io.ByteArrayOutputStream
@@ -21,8 +21,10 @@ import java.nio.ByteOrder
  * Writes binary glTF 2.0: metres, Y up, right-handed. Blender's importer converts to its own
  * Z-up frame, so the model arrives upright at 1:1 scale.
  *
- * Node tree: project > room > one node per wall, floor and ceiling. When [plan] is given it is
- * stored in the project node's `extras`, so the file carries its own editable source.
+ * Node tree: project > room > one node per wall, floor and ceiling. Each [Surface] of an object
+ * becomes a primitive with its own material, which Blender shows as a material slot. When
+ * [plan] is given it is stored in the project node's `extras`, so the file carries its own
+ * editable source.
  */
 object GlbWriter {
 
@@ -31,6 +33,7 @@ object GlbWriter {
         val bufferViews = ArrayList<JsonObject>()
         val accessors = ArrayList<JsonObject>()
         val meshes = ArrayList<JsonObject>()
+        val materials = ArrayList<JsonObject>()
         val nodes = ArrayList<JsonObject?>()
 
         fun view(bytes: ByteArray, target: Int): Int {
@@ -43,17 +46,18 @@ object GlbWriter {
             return bufferViews.size - 1
         }
 
-        fun vec3Accessor(data: FloatArray, withBounds: Boolean): Int {
+        fun floatAccessor(data: FloatArray, width: Int, withBounds: Boolean = false): Int {
             val bytes = ByteBuffer.allocate(data.size * 4).order(ByteOrder.LITTLE_ENDIAN)
             data.forEach { bytes.putFloat(it) }
             val v = view(bytes.array(), ARRAY_BUFFER)
             accessors += buildJsonObject {
-                put("bufferView", v); put("componentType", FLOAT); put("count", data.size / 3); put("type", "VEC3")
+                put("bufferView", v); put("componentType", FLOAT); put("count", data.size / width)
+                put("type", if (width == 3) "VEC3" else "VEC2")
                 if (withBounds) {
-                    val min = FloatArray(3) { Float.POSITIVE_INFINITY }
-                    val max = FloatArray(3) { Float.NEGATIVE_INFINITY }
+                    val min = FloatArray(width) { Float.POSITIVE_INFINITY }
+                    val max = FloatArray(width) { Float.NEGATIVE_INFINITY }
                     for (i in data.indices) {
-                        min[i % 3] = minOf(min[i % 3], data[i]); max[i % 3] = maxOf(max[i % 3], data[i])
+                        min[i % width] = minOf(min[i % width], data[i]); max[i % width] = maxOf(max[i % width], data[i])
                     }
                     putJsonArray("min") { min.forEach { add(it) } }
                     putJsonArray("max") { max.forEach { add(it) } }
@@ -78,16 +82,21 @@ object GlbWriter {
             val children = ArrayList<Int>()
             for (part in room.parts) {
                 if (part.indices.isEmpty()) continue
-                val p = vec3Accessor(part.positions, withBounds = true)
-                val n = vec3Accessor(part.normals, withBounds = false)
-                val i = indexAccessor(part.indices)
+                val p = floatAccessor(part.positions, 3, withBounds = true)
+                val n = floatAccessor(part.normals, 3)
+                // glTF measures v downward from the top of the image; ours points up.
+                val t = floatAccessor(FloatArray(part.uvs.size) { if (it % 2 == 0) part.uvs[it] else 1f - part.uvs[it] }, 2)
                 meshes += buildJsonObject {
                     put("name", part.name)
                     putJsonArray("primitives") {
-                        add(buildJsonObject {
-                            putJsonObject("attributes") { put("POSITION", p); put("NORMAL", n) }
-                            put("indices", i); put("material", part.category.ordinal); put("mode", TRIANGLES)
-                        })
+                        for (surface in part.surfaces) {
+                            materials += material(surface.material, part.category, mode)
+                            val i = indexAccessor(surface.indices)
+                            add(buildJsonObject {
+                                putJsonObject("attributes") { put("POSITION", p); put("NORMAL", n); put("TEXCOORD_0", t) }
+                                put("indices", i); put("material", materials.size - 1); put("mode", TRIANGLES)
+                            })
+                        }
                     }
                 }
                 nodes += buildJsonObject { put("name", part.name); put("mesh", meshes.size - 1) }
@@ -115,7 +124,7 @@ object GlbWriter {
             put("nodes", JsonArray(nodes.map { it!! }))
             if (meshes.isNotEmpty()) {
                 put("meshes", JsonArray(meshes))
-                put("materials", materials(mode))
+                put("materials", JsonArray(materials))
                 put("accessors", JsonArray(accessors))
                 put("bufferViews", JsonArray(bufferViews))
                 putJsonArray("buffers") { add(buildJsonObject { put("byteLength", binBytes.size) }) }
@@ -133,19 +142,23 @@ object GlbWriter {
         return out.array()
     }
 
-    /** One material per [Category], indexed by its ordinal. */
-    private fun materials(mode: ExportMode) = buildJsonArray {
-        fun material(name: String, r: Double, g: Double, b: Double, doubleSided: Boolean) = add(buildJsonObject {
+    /** A plain starting material. Surfaces with nothing behind them are double-sided so they show from both sides. */
+    private fun material(name: String, category: Category, mode: ExportMode): JsonObject {
+        val body = name.endsWith(RoomMesher.BODY_SUFFIX)
+        val rgb = when {
+            body -> doubleArrayOf(0.70, 0.70, 0.68)
+            category == Category.WALL -> doubleArrayOf(0.85, 0.85, 0.82)
+            category == Category.FLOOR -> doubleArrayOf(0.55, 0.45, 0.35)
+            else -> doubleArrayOf(0.95, 0.95, 0.95)
+        }
+        return buildJsonObject {
             put("name", name)
             putJsonObject("pbrMetallicRoughness") {
-                putJsonArray("baseColorFactor") { add(r); add(g); add(b); add(1.0) }
+                putJsonArray("baseColorFactor") { rgb.forEach { add(it) }; add(1.0) }
                 put("metallicFactor", 0.0); put("roughnessFactor", 0.9)
             }
-            if (doubleSided) put("doubleSided", true)
-        })
-        material("Wall", 0.85, 0.85, 0.82, doubleSided = mode == ExportMode.SHELL)
-        material("Floor", 0.55, 0.45, 0.35, doubleSided = true)
-        material("Ceiling", 0.95, 0.95, 0.95, doubleSided = true)
+            if (category != Category.WALL || mode == ExportMode.SHELL) put("doubleSided", true)
+        }
     }
 
     private fun intArray(values: List<Int>) = JsonArray(values.map { JsonPrimitive(it) })

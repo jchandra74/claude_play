@@ -16,6 +16,9 @@ import roomscanner.core.model.Room
  * outer face [thickness] further out, top, bottom, the mitred ends where it meets its
  * neighbours, and the reveals of its openings. In shell mode only the room-side face exists.
  * Floors and ceilings are flat polygons in both modes.
+ *
+ * Every object has its own material, named after it, so each can be coloured on its own. A solid
+ * wall has two: the room-side face, and "_Body" for everything else.
  */
 object RoomMesher {
 
@@ -62,7 +65,9 @@ object RoomMesher {
 
         val parts = ArrayList<MeshPart>()
         for (i in 0 until n) {
-            val wall = MeshBuilder("${base}_Wall_${"%02d".format(i + 1)}", Category.WALL)
+            val wallName = "${base}_Wall_${"%02d".format(i + 1)}"
+            // UVs on the room-side face run from the wall's start corner at floor level.
+            val wall = MeshBuilder(wallName, Category.WALL, listOf(wallName, wallName + BODY_SUFFIX), v[i].at(0.0))
             meshWall(room, i, v[i], v[(i + 1) % n], outer[i], outer[(i + 1) % n], h, t, solid, wall, floor, ceiling, warnings)
             if (!wall.isEmpty) parts += wall.build()
         }
@@ -136,12 +141,12 @@ object RoomMesher {
             }
             wall.quad(inner(ci, y0), inner(ci + 1, y0), inner(ci + 1, y1), inner(ci, y1), in3)
             if (!solid) continue
-            wall.quad(outer(ci, y0), outer(ci + 1, y0), outer(ci + 1, y1), outer(ci, y1), out3)
+            wall.quad(outer(ci, y0), outer(ci + 1, y0), outer(ci + 1, y1), outer(ci, y1), out3, BODY)
             // A side of the cell is on the solid's surface if it is at the wall's edge or borders a hole.
-            if (ci == 0 || open(ci - 1, cj)) wall.quad(inner(ci, y0), inner(ci, y1), outer(ci, y1), outer(ci, y0), d3 * -1.0)
-            if (ci == nu - 1 || open(ci + 1, cj)) wall.quad(inner(ci + 1, y0), inner(ci + 1, y1), outer(ci + 1, y1), outer(ci + 1, y0), d3)
-            if (cj == 0 || open(ci, cj - 1)) wall.quad(inner(ci, y0), inner(ci + 1, y0), outer(ci + 1, y0), outer(ci, y0), Vec3.DOWN)
-            if (cj == nv - 1 || open(ci, cj + 1)) wall.quad(inner(ci, y1), inner(ci + 1, y1), outer(ci + 1, y1), outer(ci, y1), Vec3.UP)
+            if (ci == 0 || open(ci - 1, cj)) wall.quad(inner(ci, y0), inner(ci, y1), outer(ci, y1), outer(ci, y0), d3 * -1.0, BODY)
+            if (ci == nu - 1 || open(ci + 1, cj)) wall.quad(inner(ci + 1, y0), inner(ci + 1, y1), outer(ci + 1, y1), outer(ci + 1, y0), d3, BODY)
+            if (cj == 0 || open(ci, cj - 1)) wall.quad(inner(ci, y0), inner(ci + 1, y0), outer(ci + 1, y0), outer(ci, y0), Vec3.DOWN, BODY)
+            if (cj == nv - 1 || open(ci, cj + 1)) wall.quad(inner(ci, y1), inner(ci + 1, y1), outer(ci + 1, y1), outer(ci, y1), Vec3.UP, BODY)
         }
     }
 
@@ -172,6 +177,8 @@ object RoomMesher {
         return s.ifEmpty { "Room" }
     }
 
+    const val BODY_SUFFIX = "_Body"
+    private const val BODY = 1
     private const val MARGIN = 0.02
     private const val MIN_OPENING = 0.05
 }

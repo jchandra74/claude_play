@@ -71,6 +71,42 @@ class MesherTest {
         assertEquals(23.75 + 1.0 * t, parts.single { it.category == Category.CEILING }.area(), 1e-4)
     }
 
+    @Test fun `textures map at true scale on every face, in both modes`() {
+        val r = room(L_SHAPE, openings = mapOf(0 to listOf(window, tall), 1 to listOf(door))).copy(origin = Pose2(3.0, -1.0, 0.4))
+        for (mode in ExportMode.entries) {
+            RoomMesher.mesh(project(r), mode, 0.12).rooms.single().parts.forEach { assertUvsAreTrueScale(it) }
+        }
+    }
+
+    @Test fun `room-side wall face maps to distance along the wall and height`() {
+        val parts = RoomMesher.mesh(project(room(rect(4.0, 3.0)).copy(origin = Pose2(7.0, 2.0, 1.1))), ExportMode.SOLID, 0.1).rooms.single().parts
+        val wall = parts[1] // the 3 m wall
+        val face = wall.surfaces.single { it.material == "Room_Wall_02" }.indices
+        val us = face.map { wall.uv(it).x }
+        val vs = face.map { wall.uv(it).z }
+        assertEquals(0.0, us.min(), 1e-5); assertEquals(3.0, us.max(), 1e-5)
+        assertEquals(0.0, vs.min(), 1e-5); assertEquals(2.4, vs.max(), 1e-5)
+    }
+
+    @Test fun `each object has its own material, and solid walls split face from body`() {
+        val solid = RoomMesher.mesh(project(room(rect(4.0, 3.0), openings = mapOf(0 to listOf(window)))), ExportMode.SOLID, 0.1).rooms.single().parts
+        val wall = solid[0]
+        assertEquals(listOf("Room_Wall_01", "Room_Wall_01_Body"), wall.surfaces.map { it.material })
+        // The face surface is exactly the room-side face: wall area minus the window.
+        val face = wall.surfaces[0].indices
+        val faceArea = (0 until face.size / 3).sumOf { t ->
+            val a = wall.vertex(face[3 * t]); val b = wall.vertex(face[3 * t + 1]); val c = wall.vertex(face[3 * t + 2])
+            (b - a).cross(c - a).length() / 2
+        }
+        assertEquals(4.0 * 2.4 - 1.2 * 1.1, faceArea, 1e-4)
+        assertEquals(listOf("Room_Floor"), solid.single { it.category == Category.FLOOR }.surfaces.map { it.material })
+
+        val shell = RoomMesher.mesh(project(room(rect(4.0, 3.0))), ExportMode.SHELL).rooms.single().parts
+        assertEquals(listOf("Room_Wall_01"), shell[0].surfaces.map { it.material })
+        val all = shell.flatMap { p -> p.surfaces.map { it.material } }
+        assertEquals(all.size, all.toSet().size)
+    }
+
     @Test fun `overlapping openings merge into one hole`() {
         val a = Opening("a", OpeningType.WINDOW, offset = 1.0, sill = 0.5, width = 1.0, height = 1.0)
         val b = Opening("b", OpeningType.WINDOW, offset = 1.5, sill = 1.0, width = 1.0, height = 1.0)

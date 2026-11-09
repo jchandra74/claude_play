@@ -248,8 +248,12 @@ Rules:
 - **Floor and ceiling**: ear-clipping triangulation of the room polygon.
 - **Normals**: flat, facing into the room for shell mode and outward from the solid for solid
   mode.
-- No textures or UVs in v1. One material per category (wall, floor, ceiling) so they are easy
-  to reassign.
+- **Materials**: every object has its own material, named after it, so each wall, floor and
+  ceiling can be coloured independently straight after import. A solid wall has two slots:
+  the room-side face (`LivingRoom_Wall_03`) and everything else (`LivingRoom_Wall_03_Body`).
+- **UVs**: every face is mapped flat at true scale, one UV unit per metre, upright on vertical
+  faces and never mirrored. On a room-side wall face, u is the distance from the wall's start
+  corner and v is the height above the floor. No image textures are exported.
 
 ## 10. Export and transfer
 

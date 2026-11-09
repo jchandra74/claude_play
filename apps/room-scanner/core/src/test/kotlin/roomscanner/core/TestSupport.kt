@@ -25,6 +25,24 @@ fun project(vararg rooms: Room) = Project(name = "Test", rooms = rooms.toList())
 fun MeshPart.vertex(i: Int) = Vec3(positions[3 * i].toDouble(), positions[3 * i + 1].toDouble(), positions[3 * i + 2].toDouble())
 fun MeshPart.normal(i: Int) = Vec3(normals[3 * i].toDouble(), normals[3 * i + 1].toDouble(), normals[3 * i + 2].toDouble())
 
+fun MeshPart.uv(i: Int) = Vec2(uvs[2 * i].toDouble(), uvs[2 * i + 1].toDouble())
+
+/**
+ * UVs must be at true scale (a metre in space is one unit in UV) and unmirrored (a triangle
+ * seen from its front is counter-clockwise in UV, with v up).
+ */
+fun assertUvsAreTrueScale(part: MeshPart) {
+    assertEquals(part.vertexCount * 2, part.uvs.size)
+    for (t in 0 until part.triangleCount) {
+        val i = IntArray(3) { part.indices[3 * t + it] }
+        for (k in 0..2) {
+            val a = i[k]; val b = i[(k + 1) % 3]
+            assertEquals((part.vertex(b) - part.vertex(a)).length(), part.uv(b).distanceTo(part.uv(a)), 1e-4, "${part.name}: texture is stretched")
+        }
+        assertTrue((part.uv(i[1]) - part.uv(i[0])).cross(part.uv(i[2]) - part.uv(i[0])) > 0, "${part.name}: texture is mirrored")
+    }
+}
+
 fun MeshPart.area(): Double = (0 until triangleCount).sumOf { t ->
     val a = vertex(indices[3 * t]); val b = vertex(indices[3 * t + 1]); val c = vertex(indices[3 * t + 2])
     (b - a).cross(c - a).length() / 2
