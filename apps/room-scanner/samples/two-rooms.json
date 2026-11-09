@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "name": "Sample flat",
+  "units": "metric",
+  "rooms": [
+    {
+      "id": "r1",
+      "name": "Living room",
+      "height": 2.4,
+      "vertices": [
+        { "x": 0.0, "z": 0.0 },
+        { "x": 5.0, "z": 0.0 },
+        { "x": 5.0, "z": 4.0 },
+        { "x": 2.5, "z": 4.0 },
+        { "x": 2.5, "z": 5.5 },
+        { "x": 0.0, "z": 5.5 }
+      ],
+      "walls": [
+        { "id": "w1", "openings": [
+          { "id": "o1", "type": "window", "offset": 1.5, "sill": 0.9, "width": 1.6, "height": 1.2 }
+        ] },
+        { "id": "w2", "openings": [
+          { "id": "o2", "type": "door", "offset": 1.5, "width": 0.82, "height": 2.03, "linkId": "L1" }
+        ] },
+        { "id": "w3" },
+        { "id": "w4" },
+        { "id": "w5" },
+        { "id": "w6", "openings": [
+          { "id": "o3", "type": "window", "offset": 2.0, "sill": 0.9, "width": 1.2, "height": 1.2 }
+        ] }
+      ]
+    },
+    {
+      "id": "r2",
+      "name": "Bedroom",
+      "height": 2.4,
+      "origin": { "x": 5.2, "z": 0.5, "yaw": 0.0 },
+      "vertices": [
+        { "x": 0.0, "z": 0.0 },
+        { "x": 3.5, "z": 0.0 },
+        { "x": 3.5, "z": 3.0 },
+        { "x": 0.0, "z": 3.0 }
+      ],
+      "walls": [
+        { "id": "w1" },
+        { "id": "w2", "openings": [
+          { "id": "o1", "type": "window", "offset": 0.8, "sill": 0.9, "width": 1.2, "height": 1.2 }
+        ] },
+        { "id": "w3" },
+        { "id": "w4", "openings": [
+          { "id": "o2", "type": "door", "offset": 1.18, "width": 0.82, "height": 2.03, "linkId": "L1" }
+        ] }
+      ]
+    }
+  ],
+  "settings": { "wallThickness": 0.1, "exportMode": "solid" }
+}

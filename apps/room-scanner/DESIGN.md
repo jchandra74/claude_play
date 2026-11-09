@@ -1,6 +1,7 @@
 # Room Scanner: design doc
 
-Status: draft for review. Nothing is built yet.
+Status: M0 (the `core` library and the plan-to-GLB tool) is built and tested. See `README.md`.
+M1 onward (the Android app) is not started.
 Working name: Room Scanner (placeholder; see open questions).
 
 ## 1. Summary
@@ -173,8 +174,8 @@ The plan is 2D-first. A room is a polygon with a height; everything 3D is derive
     "id": "r1",
     "name": "Living room",
     "height": 2.42,
-    "origin": { "x": 0.0, "z": 0.0, "yaw": 0.0 },   // room frame in project frame
-    "vertices": [ { "x": 0.0, "z": 0.0 }, { "x": 4.12, "z": 0.0 }, ... ],  // CCW from above
+    "origin": { "x": 0.0, "z": 0.0, "yaw": 0.0 },   // room frame in project frame; yaw in radians
+    "vertices": [ { "x": 0.0, "z": 0.0 }, { "x": 4.12, "z": 0.0 }, ... ],  // either winding; normalised on load
     "walls": [{
       "id": "w1",                    // wall i runs vertices[i] -> vertices[i+1]
       "lockedLength": null,          // metres, if the user typed a measurement
@@ -240,8 +241,10 @@ Rules:
   opening edges. No general triangulator needed, and the result is clean quads-as-triangle-pairs
   that Blender's "Tris to Quads" restores exactly.
 - **Thickness** (solid mode): the room polygon is offset outward; corners are mitred. Openings
-  get reveal faces through the wall depth. Where two rooms share a wall, one wall body is
-  generated, not two overlapping ones.
+  get reveal faces through the wall depth. Each wall is its own closed solid.
+- **Shared walls** (M4, not built): for now every room gets its own walls, `wallThickness`
+  thick. Two rooms placed twice that distance apart therefore meet back to back, as two leaves
+  of one wall. Merging them into a single body is M4 work.
 - **Floor and ceiling**: ear-clipping triangulation of the room polygon.
 - **Normals**: flat, facing into the room for shell mode and outward from the solid for solid
   mode.
@@ -306,7 +309,7 @@ Everything above the last two lines runs without a phone.
 
 | | Deliverable | Verifiable without a phone |
 |---|---|---|
-| M0 | `core`: model, solver, mesh, GLB writer, tests. A CLI that turns a plan JSON into a GLB. | Yes |
+| M0 (done) | `core`: model, solver, mesh, GLB writer, tests. A CLI that turns a plan JSON into a GLB. | Yes |
 | M1 | App shell, AR session, floor detection, corner taps, room closing, AR overlay. | No |
 | M2 | Ceiling height, openings, wall mode for hidden corners. | No |
 | M3 | Plan review screen, locked lengths, project save and load, export and share. | Partly |
