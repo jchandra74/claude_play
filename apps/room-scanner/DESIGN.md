@@ -1,7 +1,7 @@
 # Room Scanner: design doc
 
-Status: M0 (the `core` library and the plan-to-GLB tool) is built and tested. See `README.md`.
-M1 onward (the Android app) is not started.
+Status: the `core` library is built and tested, and a first version of the Android app builds.
+The app has not been run on a phone yet. `README.md` lists what is and is not in it.
 Working name: Room Scanner (placeholder; see open questions).
 
 ## 1. Summary
@@ -109,7 +109,7 @@ ARCore frame ──> capture (ar/) ──> taps in world space
 |---|---|---|
 | Language | Kotlin | Standard for Android; `core` stays portable. |
 | AR | ARCore SDK | Motion tracking, plane detection, depth. |
-| AR rendering | SceneView (Filament) | Avoids writing a GL renderer for posts, lines and panels. |
+| AR rendering | Own minimal renderer | OpenGL draws only the camera image. Guides are 3D lines projected in `core` and drawn by Compose, so the drawing logic is unit-tested and no third-party AR library is needed. (Changed from SceneView in the first draft.) |
 | UI | Jetpack Compose | Capture HUD, plan view on a Compose `Canvas`. |
 | Serialisation | kotlinx.serialization | Project JSON. |
 | GLB | Own writer in `core` | The output is simple (positions, normals, indices); a small writer beats a dependency. |
@@ -136,8 +136,9 @@ ARCore-supported devices.
   walls and bare floors.
 - Error grows with distance and with a shallow viewing angle. The reticle turns amber beyond
   about 4 m or below about 15 degrees of grazing angle, prompting the user to step closer.
-- Each corner is stored as an ARCore anchor during the session, so it moves with tracking
-  corrections. Positions are read from the anchors when the room is closed.
+- Planned: store each corner as an ARCore anchor during the session, so it moves with tracking
+  corrections. The first app version stores the tapped position directly and relies on the
+  closure adjustment instead.
 
 ### 5.3 Ceiling height
 
@@ -314,10 +315,10 @@ Everything above the last two lines runs without a phone.
 | | Deliverable | Verifiable without a phone |
 |---|---|---|
 | M0 (done) | `core`: model, solver, mesh, GLB writer, tests. A CLI that turns a plan JSON into a GLB. | Yes |
-| M1 | App shell, AR session, floor detection, corner taps, room closing, AR overlay. | No |
-| M2 | Ceiling height, openings, wall mode for hidden corners. | No |
-| M3 | Plan review screen, locked lengths, project save and load, export and share. | Partly |
-| M4 | Multiple rooms and doorway alignment. | Solver yes, capture no |
+| M1 (built, untested on a phone) | App shell, AR session, floor detection, corner taps, room closing, AR overlay. | No |
+| M2 (partly built) | Ceiling height and openings are in the app. Wall mode for hidden corners is in `core` only. | No |
+| M3 (built, untested on a phone) | Plan review screen, locked lengths, project save and load, export and share. | Partly |
+| M4 (partly built) | Several rooms in one AR session keep their relative positions. Doorway alignment is in `core` only. | Solver yes, capture no |
 | M5 | Blender add-on that rebuilds editable walls from the embedded plan. | Yes |
 
 M0 comes first on purpose: it proves the export in Blender before any AR work, and it is the
@@ -339,6 +340,7 @@ ceilings, multiple storeys, DXF export.
 
 ## 15. Repository notes
 
+- Building the app needs the Android SDK (platform 35, build-tools 35.0.0); `core` does not.
 - This lives in `apps/room-scanner/` in the arcade monorepo for now. It shares nothing with the
   games and can be moved to its own repository later with history
   (`git subtree split` or `git filter-repo`).

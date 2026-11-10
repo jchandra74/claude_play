@@ -1,10 +1,11 @@
 pluginManagement {
     repositories {
+        google()
         gradlePluginPortal()
         mavenCentral()
-        google()
     }
 }
 
 rootProject.name = "room-scanner"
 include(":core")
+include(":app")
